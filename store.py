@@ -50,6 +50,40 @@ CREATE TABLE IF NOT EXISTS settlements (
     payload TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL,
     PRIMARY KEY (day, kind)
 );
+CREATE TABLE IF NOT EXISTS positions (
+    kind TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+    qty REAL NOT NULL DEFAULT 0, available REAL NOT NULL DEFAULT 0,
+    cost_cents INTEGER NOT NULL DEFAULT 0, last_cents INTEGER NOT NULL DEFAULT 0,
+    updated REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, code)
+);
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idem TEXT UNIQUE, ts REAL NOT NULL, side TEXT NOT NULL,
+    kind TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+    qty REAL NOT NULL DEFAULT 0, price_cents INTEGER NOT NULL DEFAULT 0,
+    amount_cents INTEGER NOT NULL DEFAULT 0, fee_cents INTEGER NOT NULL DEFAULT 0,
+    pnl_cents INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_trades_ts ON trades(ts DESC);
+CREATE TABLE IF NOT EXISTS loans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idem TEXT UNIQUE, kind TEXT NOT NULL, principal_cents INTEGER NOT NULL DEFAULT 0,
+    balance_cents INTEGER NOT NULL DEFAULT 0, rate REAL NOT NULL DEFAULT 0,
+    months INTEGER NOT NULL DEFAULT 0, monthly_cents INTEGER NOT NULL DEFAULT 0,
+    ts REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
+    value_cents INTEGER NOT NULL DEFAULT 0, ts REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS market_cache (
+    day TEXT NOT NULL, code TEXT NOT NULL, price_cents INTEGER NOT NULL DEFAULT 0,
+    prev_cents INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT '',
+    ts REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, code)
+);
 """
 
 
@@ -106,6 +140,7 @@ class Store:
     def init(self) -> dict:
         self.root.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path), timeout=5.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
@@ -147,6 +182,13 @@ class Store:
             return []
         with self._lock:
             return list(self._conn.execute(sql, params).fetchall())
+
+    # ---------------- 通用读写（给金融模块） ----------------
+    def write(self, sql: str, params=()) -> int:
+        return self._write(sql, params)
+
+    def query(self, sql: str, params=()) -> list:
+        return self._query(sql, params)
 
     # ---------------- 业务最小集 ----------------
     def add_event(self, day: str, kind: str, weight: float = 0.0, payload: str = "{}",

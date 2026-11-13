@@ -29,13 +29,19 @@ except Exception:  # 离线单测 / 直接按文件导入
             self.context = context
 
 try:  # 包模式
+    from .finance_life import FinanceLife
     from .finance_link import FinanceLink
+    from .finance_store import FinanceRepo
+    from .finance_trading import Trading
     from .guard import guard_sync, isolated
     from .runtime import Runtime
     from .scheduler import Scheduler
     from .store import Store
 except ImportError:  # 直接按文件加载时
+    from finance_life import FinanceLife
     from finance_link import FinanceLink
+    from finance_store import FinanceRepo
+    from finance_trading import Trading
     from guard import guard_sync, isolated
     from runtime import Runtime
     from scheduler import Scheduler
@@ -57,6 +63,9 @@ class WatchPlugin(Star):
         self.store: Store | None = None
         self.scheduler: Scheduler | None = None
         self.finance = FinanceLink(self)
+        self.finance_repo = None
+        self.trading = None
+        self.finance_life = None
         self._closed = asyncio.Event()
         self._started_at = 0.0
         self._degraded = ""
@@ -78,12 +87,29 @@ class WatchPlugin(Star):
             isolated("boot.store", exc)
             self._degraded = "store"
             logger.error("[WATCH] degraded reason=store_init err=%r", exc)
+        if self.store is not None:
+            self.finance_repo = FinanceRepo(self.store)
+            self.trading = Trading(self, self.runtime, self.finance_repo, self.finance)
+            self.finance_life = FinanceLife(self, self.finance_repo, self.finance)
+            try:
+                await self.runtime.run_db(self.trading.refresh_available, timeout=5)
+            except Exception as exc:
+                isolated("finance.available", exc)
         self.runtime.start_watchdog()
         self.scheduler = Scheduler(self.runtime)
         self.scheduler.every("heartbeat", 300, self._heartbeat)
+        if self.finance_life is not None:
+            self.scheduler.every("finance_settle", 1800, self._finance_tick, allow_fast=True)
         self._register_web()
         logger.info("[WATCH] loaded %s (%s) api=%s generation=%s",
                     PLUGIN_VERSION, DISPLAY_NAME, API_VERSION, self.runtime.generation)
+
+    async def _finance_tick(self):
+        """每 30 分钟检查一次：工资 / 房租 / 水电是否到了该结算的日期。"""
+        try:
+            await self.finance_life.tick()
+        except Exception as exc:
+            isolated("finance.settle", exc)
 
     async def _heartbeat(self):
         """心跳必须走 DB 线程：scheduler 回调在事件循环上，同步写库就是阻塞 amo。"""
@@ -188,6 +214,79 @@ class WatchPlugin(Star):
             isolated("finance.provider", exc)
         return None
 
+    def _snapshot_real(self) -> dict:
+        cash = self.finance.balance_cents() or 0
+        rows = []
+        if self.finance_repo is not None:
+            try:
+                rows = self.finance_repo.positions()
+            except Exception as exc:
+                isolated("finance.snapshot.positions", exc)
+        positions = []
+        market_value = 0
+        total_pnl = 0
+        for row in rows:
+            qty = float(row.get("qty") or 0)
+            cost = int(row.get("cost_cents") or 0)
+            last = int(row.get("last_cents") or cost)
+            pnl = int(round((last - cost) * qty))
+            base = cost * qty
+            total_pnl += pnl
+            market_value += int(round(last * qty))
+            positions.append({
+                "kind": row.get("kind"), "code": row.get("code"),
+                "name": row.get("name") or row.get("code"), "qty": qty,
+                "cost": cost / 100.0, "price": last / 100.0,
+                "pnl": pnl / 100.0, "pnl_pct": (pnl / base * 100.0) if base else 0.0,
+            })
+        trades = []
+        if self.finance_repo is not None:
+            try:
+                for row in self.finance_repo.trades(20):
+                    amount = int(row.get("amount_cents") or 0)
+                    if str(row.get("side")) in ("buy", "subscribe"):
+                        amount = -amount
+                    trades.append({
+                        "day": time.strftime("%m-%d %H:%M", time.localtime(float(row.get("ts") or 0))),
+                        "kind": {"buy": "买入", "sell": "卖出", "subscribe": "申购", "redeem": "赎回"}.get(
+                            str(row.get("side")), str(row.get("side"))),
+                        "target": (row.get("name") or "") + " " + str(row.get("code") or ""),
+                        "amount": amount / 100.0, "fee": int(row.get("fee_cents") or 0) / 100.0,
+                        "note": row.get("note") or "",
+                    })
+            except Exception as exc:
+                isolated("finance.snapshot.trades", exc)
+        loans = []
+        if self.finance_repo is not None:
+            try:
+                loans = self.finance_repo.loans()
+            except Exception:
+                loans = []
+        debt = sum(int(x.get("balance_cents") or 0) for x in loans)
+        monthly = sum(int(x.get("monthly_cents") or 0) for x in loans)
+        rate = max([float(x.get("rate") or 0) for x in loans] or [0.0])
+        mood = self.finance.mood()
+        return {
+            "mode": "real",
+            "wallet": {"total": (cash + market_value) / 100.0, "available": cash / 100.0,
+                       "market_value": market_value / 100.0,
+                       "today_pnl": total_pnl / 100.0,
+                       "today_pct": (total_pnl / max(1, market_value - total_pnl) * 100.0)},
+            "positions": positions,
+            "trades": trades,
+            "life": {"salary": 6800, "salary_day": 15, "next_salary": "", "rent": 0,
+                     "rent_day": 1, "utilities": 0, "month_expense": 0},
+            "mood": {"score": mood.get("score"), "dominant": mood.get("dominant"),
+                     "last_event": ""},
+            "market": {"checks": 0, "limit": 2, "last": "", "source": "腾讯 qt.gtimg.cn"},
+            "bank": {"debt": debt / 100.0, "monthly": monthly / 100.0, "rate": rate,
+                     "limit": 0, "items": loans, "note": ""},
+            "plan": {"deposit": cash / 100.0, "invest_cap": 50,
+                     "house": {"price": 0, "down_pct": 30, "years": [10, 20, 30], "monthly": 0},
+                     "car": {"price": 0, "years": 5},
+                     "rule": "她不会买买不起的；投资不超过存款 50%"},
+        }
+
     def _finance_snapshot(self, demo: bool = False) -> dict:
         """金融概览：优先问金融插件，没有就回退空态（契约见 docs/INTEGRATION-MAP.md）。"""
         if not demo:
@@ -199,6 +298,11 @@ class WatchPlugin(Star):
                         return view
                 except Exception as exc:
                     isolated("finance.snapshot", exc)
+        if not demo:
+            try:
+                return self._snapshot_real()
+            except Exception as exc:
+                isolated("finance.snapshot", exc)
         if demo:
             return {
                 "mode": "demo",
@@ -269,12 +373,40 @@ class WatchPlugin(Star):
             isolated("web.finance", exc)
             return {"status": "error", "message": "finance failed"}
 
+    async def _read_json(self):
+        try:
+            from astrbot.api.web import request as web_request
+            if web_request is not None:
+                data = await web_request.json()
+                return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            isolated("web.body", exc)
+        return {}
+
     async def _api_trade(self, request=None):
         try:
-            return {"ok": False, "message": "交易后端未接入（账本/持仓模块还在施工）"}
+            body = await self._read_json()
+            action = str(body.get("action") or "").lower()
+            code = str(body.get("code") or "").strip()
+            qty = body.get("qty") or 0
+            price = body.get("price") or None
+            idem = str(body.get("idem") or "")
+            trading = self.trading
+            if trading is None:
+                return {"ok": False, "message": "交易模块未就绪"}
+            if action == "buy":
+                return await trading.buy(code, qty, price, idem)
+            if action == "sell":
+                return await trading.sell(code, qty, price, idem)
+            if action == "subscribe":
+                amount_cents = int(round(float(body.get("qty") or body.get("amount") or 0) * 100))
+                return await trading.subscribe(code, amount_cents, price, idem)
+            if action == "redeem":
+                return await trading.redeem(code, qty, price, idem)
+            return {"ok": False, "message": "未知操作"}
         except Exception as exc:
             isolated("web.trade", exc)
-            return {"ok": False, "message": "trade failed"}
+            return {"ok": False, "message": "交易失败：%s" % exc}
 
     async def _api_diag(self, request=None):
         try:
@@ -318,7 +450,15 @@ class WatchPlugin(Star):
         mood = self.finance.mood()
         cents = self.finance.balance_cents()
         money = "余额读取失败" if cents is None else "可用余额 ¥%s" % format(cents / 100.0, ",.2f")
-        return "她现在%s。%s。" % (mood.get("word") or "平静", money)
+        holdings = []
+        try:
+            if self.finance_repo is not None:
+                for row in self.finance_repo.positions()[:3]:
+                    holdings.append("%s %s 股" % (row.get("name") or row.get("code"), row.get("qty")))
+        except Exception as exc:
+            isolated("finance.text.positions", exc)
+        tail = ("，持有 " + "、".join(holdings)) if holdings else "，现在空仓"
+        return "她现在%s。%s%s。" % (mood.get("word") or "平静", money, tail)
 
     async def _handle_test(self, args) -> str:
         if not bool(self.config.get("allow_test_commands")):
