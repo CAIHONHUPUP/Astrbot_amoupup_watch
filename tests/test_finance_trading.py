@@ -106,7 +106,8 @@ def test_buy_rejects_insufficient_balance(env, monkeypatch):
     monkeypatch.setattr(ft, "in_session", lambda now: True)
     finance.amo.wallet.cents = 100
     res = asyncio.run(trading.buy("600519", 100, price=100.0))
-    assert res["ok"] is False and "余额不足" in res["message"]
+    # 钱不够时先被「投资 ≤ 存款 50%」挡住，不会透支
+    assert res["ok"] is False and ("50%" in res["message"] or "余额不足" in res["message"])
 
 
 def test_sell_needs_t_plus_1(env, monkeypatch):
@@ -139,3 +140,12 @@ def test_quote_parser():
     assert rows["600519"]["name"] == "贵州茅台"
     assert rows["600519"]["price"] == 1680.0
     assert rows["600519"]["prev_close"] == 1670.0
+def test_invest_cap_is_half_of_deposit(env, monkeypatch):
+    trading, _, finance, _ = env
+    monkeypatch.setattr(ft, "in_session", lambda now: True)
+    # 现金 20,000 元：买 100 股 × 100 元 = 10,000 元（正好 50%）
+    ok = asyncio.run(trading.buy("600519", 100, price=100.0, idem="cap1"))
+    assert ok["ok"] is True
+    # 再买 100 股，投入变 20,000 / 存款 20,000，超过 50%
+    res = asyncio.run(trading.buy("600519", 100, price=100.0, idem="cap2"))
+    assert res["ok"] is False and "50%" in res["message"]

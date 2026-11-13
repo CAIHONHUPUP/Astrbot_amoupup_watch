@@ -73,6 +73,21 @@ class Trading:
     def _day(self):
         return self._now().date().isoformat()
 
+    def _invested_cents(self):
+        total = 0
+        try:
+            for row in self.repo.positions():
+                total += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)
+        except Exception:
+            return 0
+        return int(round(total))
+
+    def _cap_ok(self, wallet, add_cents):
+        """投资不超过存款的 50%（存款 = 现金 + 已投入）。"""
+        invested = self._invested_cents()
+        deposit = int(wallet.balance()) + invested
+        return (invested + int(add_cents)) <= deposit * 0.5 + 1
+
     # ---------- 股票 ----------
     async def buy(self, code, qty, price=None, idem=""):
         code, qty = str(code).strip(), int(float(qty or 0))
@@ -95,6 +110,8 @@ class Trading:
         wallet = self._wallet()
         if wallet is None:
             return {"ok": False, "message": "钱包未就绪"}
+        if not self._cap_ok(wallet, amount):
+            return {"ok": False, "message": "投资不能超过存款的 50%"}
         if not wallet.debit(amount + fee, "买入 %s" % code, idem):
             return {"ok": False, "message": "余额不足，买不起"}
         pos = self.repo.position("stock", code) or {"qty": 0, "cost_cents": 0, "available": 0}
@@ -162,6 +179,8 @@ class Trading:
         fee = int(round(amount * FUND_BUY_RATE))
         shares = round((amount - fee) / (nav * 100.0), 2)
         idem = str(idem or ("fund_buy:%s:%s" % (code, self._now().strftime("%Y%m%d%H%M%S"))))
+        if not self._cap_ok(wallet, amount):
+            return {"ok": False, "message": "投资不能超过存款的 50%"}
         if not wallet.debit(amount, "申购基金 %s" % code, idem):
             return {"ok": False, "message": "余额不足"}
         pos = self.repo.position("fund", code) or {"qty": 0, "cost_cents": 0, "available": 0}
