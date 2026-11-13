@@ -14,9 +14,12 @@ import time
 
 try:  # 正常运行时
     from astrbot.api import logger
+    from astrbot.api.event import AstrMessageEvent, filter
     from astrbot.api.star import Context, Star
 except Exception:  # 离线单测 / 直接按文件导入
     logger = logging.getLogger("watch")
+    AstrMessageEvent = None
+    filter = None
 
     class Context:  # type: ignore[no-redef]
         pass
@@ -38,6 +41,7 @@ except ImportError:  # 直接按文件加载时
 
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
+DISPLAY_NAME = "我能永远守护你"
 PLUGIN_VERSION = "0.1.0"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag"]
@@ -74,8 +78,8 @@ class WatchPlugin(Star):
         self.runtime.start_watchdog()
         self.scheduler = Scheduler(self.runtime)
         self.scheduler.every("heartbeat", 300, self._heartbeat)
-        logger.info("[WATCH] loaded %s api=%s generation=%s",
-                    PLUGIN_VERSION, API_VERSION, self.runtime.generation)
+        logger.info("[WATCH] loaded %s (%s) api=%s generation=%s",
+                    PLUGIN_VERSION, DISPLAY_NAME, API_VERSION, self.runtime.generation)
 
     async def _heartbeat(self):
         """心跳必须走 DB 线程：scheduler 回调在事件循环上，同步写库就是阻塞 amo。"""
@@ -118,6 +122,7 @@ class WatchPlugin(Star):
         tasks = self.runtime.tasks() if self.runtime is not None else {"count": 0, "names": []}
         return {
             "plugin": PLUGIN_NAME,
+            "display_name": DISPLAY_NAME,
             "version": PLUGIN_VERSION,
             "api_version": API_VERSION,
             "features": list(FEATURES),
@@ -138,6 +143,9 @@ class WatchPlugin(Star):
 
     async def diag(self) -> dict:
         out = self.diag_sync()
+        out.update({"plugin": PLUGIN_NAME, "display_name": DISPLAY_NAME,
+                    "version": PLUGIN_VERSION, "api": API_VERSION,
+                    "status": "stopped" if self._closed.is_set() else ("degraded" if self._degraded else "ready")})
         if self.store is not None and self.runtime is not None:
             try:
                 out["store"] = await asyncio.wait_for(self.runtime.run_db(self.store.stats), 2)
@@ -145,3 +153,69 @@ class WatchPlugin(Star):
                 isolated("port.diag.store", exc)
                 out["store"] = {"error": type(exc).__name__}
         return out
+
+    # ---------------- 命令（入口，必须被隔离） ----------------
+    def _fmt_diag(self, data: dict) -> str:
+        store = data.get("store") or {}
+        tasks = data.get("tasks") or {}
+        lag = data.get("lag") or {}
+        lines = [
+            "[%s] %s gen=%s status=%s" % (data.get("display_name", DISPLAY_NAME),
+                                          data.get("version", "?"), data.get("generation", "?"),
+                                          data.get("status", "?")),
+            "任务 %s 个: %s" % (tasks.get("count", 0), ",".join(tasks.get("names", [])) or "-"),
+            "loop lag p99=%ss max=%ss hits=%s" % (lag.get("p99", 0), lag.get("max", 0), lag.get("hits", 0)),
+        ]
+        if store:
+            lines.append("库 events=%s people=%s edges=%s settle=%s %.2fMB free=%.0fMB readonly=%s" % (
+                store.get("events", "-"), store.get("people", "-"), store.get("edges", "-"),
+                store.get("settlements", "-"), store.get("db_mb", 0), store.get("free_mb", 0),
+                store.get("readonly", "-")))
+        return "\n".join(lines)
+
+    async def _handle_watch(self, event) -> str:
+        text = (getattr(event, "message_str", "") or "").strip()
+        parts = [p for p in text.split() if p]
+        if parts and parts[0].lstrip("/").lower() in ("watch", "守护"):
+            parts = parts[1:]
+        if parts and parts[0].lower() == "test":
+            return await self._handle_test(parts[1:])
+        return self._fmt_diag(await self.diag())
+
+    async def _handle_test(self, args) -> str:
+        if not bool(self.config.get("allow_test_commands")):
+            return "测试命令没开（allow_test_commands=false）"
+        kind = args[0].lower() if args else ""
+        if kind == "raise":
+            raise RuntimeError("watch test raise（故意抛，验证隔离）")
+        if kind == "busy":
+            seconds = float(args[1]) if len(args) > 1 else 10.0
+            seconds = max(0.1, min(seconds, 60.0))
+            mode = (args[2].lower() if len(args) > 2 else "good")
+            if mode == "bad":
+                time.sleep(seconds)          # 反例：故意卡住事件循环
+            else:
+                await self.runtime.run_io(time.sleep, seconds)
+            return "busy %.1fs mode=%s lag=%s" % (seconds, mode, self.runtime.lag_stats())
+        return "未知测试：raise | busy <秒> [good|bad]"
+
+    async def watch_cmd(self, event: AstrMessageEvent):
+        """看社会插件状态：/watch、/watch diag、/watch test raise|busy"""
+        try:
+            text = await self._handle_watch(event)
+        except Exception as exc:
+            isolated("handler.watch", exc)
+            text = "[WATCH] 命令出错已被隔离，amo 不受影响（trace_id=%s）" % _tid()
+        yield event.plain_result(text)
+
+    # 命令装饰器只做注册；离线单测（没有 astrbot.api.event）时方法照样能直接调
+    if filter is not None:
+        watch_cmd = filter.command("watch")(watch_cmd)
+
+
+def _tid() -> str:
+    try:
+        from .guard import trace_id
+    except ImportError:
+        from guard import trace_id
+    return trace_id()

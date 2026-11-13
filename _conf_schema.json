@@ -125,6 +125,12 @@
     "default": 20,
     "hint": "宽限期内不向 amo 提供内容，等库和线程池就绪。"
   },
+  "allow_test_commands": {
+    "type": "bool",
+    "description": "允许 /watch test raise|busy 测试命令（验收用，平时关）",
+    "default": false,
+    "hint": "开启后可以在聊天里故意触发异常/阻塞来验证隔离，验证完记得关。"
+  },
   "storage_min_free_mb": {
     "type": "int",
     "description": "磁盘余量红线（MB）",
