@@ -165,3 +165,42 @@
 
 验证：amo 全量 **1462 passed / 8 skipped**；线上重载成功；钱包两表存在、cash=0；日志无钱包报错。
 提醒（`add_reminder`）仍按约定留到 v2。
+
+---
+
+## 10. 记忆插件接口映射（Astrbot_amoupup_data）
+
+| 能力 | 位置 | 签名 | 返回 |
+|---|---|---|---|
+| 写入（amo 门面） | `amo_memory_data.py` HumanCorePlugin | `async finance_remember(content, kind="finance", tier=2, idem_key="") -> bool` | bool |
+| 写入（底层） | `amo_memory_data.py` HumanCorePlugin | `async _data_memory_write(uid, content, kind, tier, scope, group_id, subject, platform, idem_key)` | bool |
+| 记忆插件本体 | `Astrbot_amoupup_data/main.py` MemoryAPI | `async remember(bot_id, uid, content, kind="fact", importance=0.5, scope="private", group_id="", idem_key="", subject="user", platform="") -> dict` | `{ok, reason?}` |
+| 检索（amo 门面） | `amo_memory_data.py` | `async finance_recall(query, limit=6) -> list[dict]` | list |
+| 检索（底层） | `amo_memory_data.py` | `async _data_memory_recall(uid, text, limit=6, event=None)` | list |
+| 记忆插件本体 | `Astrbot_amoupup_data/main.py` | `async recall(bot_id, uid, query="", limit=6, scope="", group_id="", platform="", pid=0) -> list[dict]` | list |
+
+字段：`content`（正文）、`kind`（分类：finance / finance_trade / finance_pnl）、`importance`（0–1，tier=2 → 0.75）、`subject="bot"`（她自己的记忆）、`idem_key`（幂等）、`scope="private"`。
+不写表名/字段名，全部走方法。
+
+---
+
+## 11. 联动点 → 接口 → 调用位置（最终）
+
+| 联动点 | amo / 守护接口 | 调用位置 |
+|---|---|---|
+| 心情变化 | `HumanState.nudge_once(idem, **deltas)` | `finance_link.py::_nudge` |
+| 情绪词（对外） | `HumanState.mood_words()` / `mood_score()` | `finance_link.py::mood` |
+| 日程事件 | `HumanState.add_schedule_item(day, item, source, reason)` | `finance_link.py::_schedule` |
+| 小日记 | `AmoDB.save_diary(day, hour, text)` | `finance_link.py::_small_diary` |
+| 长日记 | `DiaryApiMixin.write_diary_text(day, text)` | `finance_link.py::_long_diary` |
+| 余额读取 | `Wallet.balance()` | `finance_link.py::balance_cents` |
+| 入账 / 扣款 | `Wallet.credit / debit` | `finance_link.py::income / expense` |
+| 买入记忆 | `finance_remember` + `finance_recall` 回读 | `finance_link.py::record_trade(side="buy")` |
+| 卖出记忆 | 同上 | `finance_link.py::record_trade(side="sell")` |
+| 收盘盈亏记忆 | `finance_remember` | `finance_link.py::record_daily_pnl` |
+| 工资记忆 | `finance_remember` | `finance_link.py::income(salary=True)` |
+| 每笔支出记忆 | `finance_remember` | `finance_link.py::expense` |
+| 用户转账记忆 | `finance_remember` | `finance_link.py::income(reason="用户转账")` |
+| 对话前检索 | `finance_recall` | `finance_link.py::memory_context` → `finance_memory.py::MemoryLink.context` |
+| 写入回读校验 | `finance_recall` | `finance_memory.py::MemoryLink.remember(verify=True)` |
+| 面板数据 | `WatchPlugin._finance_provider` → `finance.snapshot()` | `watch/main.py::_finance_snapshot` |

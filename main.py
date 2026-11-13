@@ -29,11 +29,13 @@ except Exception:  # 离线单测 / 直接按文件导入
             self.context = context
 
 try:  # 包模式
+    from .finance_link import FinanceLink
     from .guard import guard_sync, isolated
     from .runtime import Runtime
     from .scheduler import Scheduler
     from .store import Store
 except ImportError:  # 直接按文件加载时
+    from finance_link import FinanceLink
     from guard import guard_sync, isolated
     from runtime import Runtime
     from scheduler import Scheduler
@@ -44,7 +46,7 @@ PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
 PLUGIN_VERSION = "0.1.0"
 API_VERSION = "1.0"
-FEATURES: list[str] = ["diag"]
+FEATURES: list[str] = ["diag", "finance"]
 
 
 class WatchPlugin(Star):
@@ -54,6 +56,7 @@ class WatchPlugin(Star):
         self.runtime: Runtime | None = None
         self.store: Store | None = None
         self.scheduler: Scheduler | None = None
+        self.finance = FinanceLink(self)
         self._closed = asyncio.Event()
         self._started_at = 0.0
         self._degraded = ""
@@ -170,8 +173,32 @@ class WatchPlugin(Star):
         except Exception as exc:
             isolated("web.register", exc)
 
+    def _finance_provider(self):
+        """金融插件（Astrbot_amoupup_finance）装了就把面板交给它，没装回退空态。"""
+        try:
+            context = getattr(self, "context", None)
+            getter = getattr(context, "get_registered_star", None) if context else None
+            meta = getter("Astrbot_amoupup_finance") if callable(getter) else None
+            if meta is None or getattr(meta, "activated", True) is False:
+                return None
+            instance = getattr(meta, "star_cls", None)
+            if instance is not None and callable(getattr(instance, "snapshot", None)):
+                return instance
+        except Exception as exc:
+            isolated("finance.provider", exc)
+        return None
+
     def _finance_snapshot(self, demo: bool = False) -> dict:
-        """金融概览：真实数据要等账本/持仓接入，这里先把契约定下来。"""
+        """金融概览：优先问金融插件，没有就回退空态（契约见 docs/INTEGRATION-MAP.md）。"""
+        if not demo:
+            provider = self._finance_provider()
+            if provider is not None:
+                try:
+                    view = provider.snapshot()
+                    if isinstance(view, dict):
+                        return view
+                except Exception as exc:
+                    isolated("finance.snapshot", exc)
         if demo:
             return {
                 "mode": "demo",
@@ -282,7 +309,16 @@ class WatchPlugin(Star):
             parts = parts[1:]
         if parts and parts[0].lower() == "test":
             return await self._handle_test(parts[1:])
+        if parts and parts[0].lower() in ("finance", "金融", "钱"):
+            return self._fmt_finance()
         return self._fmt_diag(await self.diag())
+
+    def _fmt_finance(self) -> str:
+        """只给自然语言情绪，不出现心情数值。"""
+        mood = self.finance.mood()
+        cents = self.finance.balance_cents()
+        money = "余额读取失败" if cents is None else "可用余额 ¥%s" % format(cents / 100.0, ",.2f")
+        return "她现在%s。%s。" % (mood.get("word") or "平静", money)
 
     async def _handle_test(self, args) -> str:
         if not bool(self.config.get("allow_test_commands")):
