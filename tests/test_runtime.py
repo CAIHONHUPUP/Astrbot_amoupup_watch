@@ -1,7 +1,7 @@
 import asyncio
 import threading
 
-from runtime import Runtime
+from core.runtime import Runtime
 
 
 def test_run_io_uses_own_pool():

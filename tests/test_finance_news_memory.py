@@ -5,11 +5,11 @@ import time
 
 import pytest
 
-import finance_memory_tier as fmt
-from finance_memory_tier import TieredMemory
-from finance_news import merge_stock_news, parse_cls, parse_eastmoney
-from finance_store import FinanceRepo
-from store import Store
+import core.memory_tier as fmt
+from core.memory_tier import TieredMemory
+from services.news_api import merge_stock_news, parse_cls, parse_eastmoney
+from models.ledger import FinanceRepo
+from models.db import Store
 
 
 class FakeMemory:

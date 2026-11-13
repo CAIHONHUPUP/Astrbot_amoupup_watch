@@ -108,6 +108,21 @@ CREATE TABLE IF NOT EXISTS market_cache (
     ts REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (day, code)
 );
+CREATE TABLE IF NOT EXISTS expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    idem TEXT UNIQUE,
+    day TEXT NOT NULL, category TEXT NOT NULL DEFAULT '',
+    label TEXT NOT NULL DEFAULT '', amount_cents INTEGER NOT NULL DEFAULT 0,
+    ts REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_expenses_day ON expenses(day);
+CREATE TABLE IF NOT EXISTS salary_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL, kind TEXT NOT NULL DEFAULT '',
+    label TEXT NOT NULL DEFAULT '', amount_cents INTEGER NOT NULL DEFAULT 0,
+    ts REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_salary_period ON salary_items(period);
 """
 
 

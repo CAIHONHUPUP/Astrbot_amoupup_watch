@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import asyncio
 
-from finance_link import FinanceLink
-from finance_memory import MemoryLink
+from core.amo_bridge import FinanceLink
+from core.memory_link import MemoryLink
 
 
 class Meta:
@@ -172,7 +172,7 @@ def test_record_trade_text_has_fields_and_no_mood_numbers():
     for token in ("买入", "贵州茅台", "600519", "100", "现价" if False else "成交价", "费用"):
         assert token in text
     assert "心情+" not in text and "心情-" not in text
-    assert amo.memories[0]["kind"] == "finance_trade"
+    assert amo.memories[0]["kind"] == "finance"   # 记忆类型统一为 finance（交易靠 idem 前缀区分）
 
 
 def test_record_daily_pnl_writes_holdings_only():

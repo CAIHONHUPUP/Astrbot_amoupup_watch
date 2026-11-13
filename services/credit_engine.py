@@ -13,8 +13,8 @@ import datetime as _dt
 import time
 
 try:
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
+    from ..guard import isolated
+except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
 
 LOW_RATIO = 0.05
@@ -76,6 +76,11 @@ class FinanceHelp:
                 debt += int(loan.get("balance_cents") or 0)
         except Exception:
             debt = 0
+        try:
+            for item in self.repo.assets():
+                market_value += int(item.get("value_cents") or 0)   # 房产/车辆计入总资产
+        except Exception:
+            pass
         return int(cash + market_value - debt)
 
     def status(self):

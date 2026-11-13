@@ -3,11 +3,11 @@ import asyncio
 
 import pytest
 
-import finance_trading as ft
-from finance_market import parse_quotes
-from finance_store import FinanceRepo
-from finance_trading import Trading
-from store import Store
+import services.trade_engine as ft
+from services.market_api import parse_quotes
+from models.ledger import FinanceRepo
+from services.trade_engine import Trading
+from models.db import Store
 
 
 class FakeWallet:

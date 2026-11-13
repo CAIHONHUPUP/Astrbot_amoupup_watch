@@ -7,11 +7,35 @@
 """
 from __future__ import annotations
 
+import hashlib
+
 #: amo 十维心情（amo_shared.py MOOD_KEYS）；只写这几个键
 POSITIVE = ("开心", "兴奋")
 NEGATIVE = ("郁闷", "委屈", "焦虑")
 
 #: 对外情绪词（按分数区间，和 amo HumanState.mood_words 对齐）
+
+#: 人设化收尾：不再千篇一律「很开心、心情不错」
+_REACTIONS = {
+    "happy": ("嘿嘿，值了", "心里美滋滋的", "这点小钱换个开心，划算",
+              "吃得香，心情也亮了一下", "开心到想转个圈"),
+    "neutral": ("还行，日子照过", "钱包又薄了一点点", "不亏，继续过", "凑合，反正得吃"),
+    "sad": ("有点肉疼", "唉，钱又少了", "心疼三秒，然后继续", "下回得省着点"),
+}
+
+
+def reaction_line(word, seed=""):
+    """按当前心情挑一句人设收尾（同一条账目永远是同一句）。"""
+    text = str(word or "")
+    if any(key in text for key in ("开心", "狂喜", "兴奋", "不错", "美")):
+        pool = _REACTIONS["happy"]
+    elif any(key in text for key in ("低落", "郁闷", "难过", "委屈", "崩溃", "伤心", "焦虑")):
+        pool = _REACTIONS["sad"]
+    else:
+        pool = _REACTIONS["neutral"]
+    digest = hashlib.sha256(str(seed).encode("utf-8")).hexdigest()
+    return pool[int(digest[:8], 16) % len(pool)]
+
 def word_for_score(score: float) -> str:
     if score >= 85:
         return "狂喜、超级开心"

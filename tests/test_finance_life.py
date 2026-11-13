@@ -4,23 +4,19 @@ import datetime as dt
 
 import pytest
 
-from finance_life import DEFAULT_SALARY_CENTS, FinanceLife
-from finance_store import FinanceRepo
-from store import Store
+from services.life_engine import DEFAULT_SALARY_CENTS, FinanceLife
+from models.ledger import FinanceRepo
+from models.db import Store
 
 
 class FakeFinance:
-    def __init__(self, ok=True):
+    def __init__(self, ok=True, cash_cents=0):
         self.calls = []
         self.ok = ok
-        self.cash = 2300000
+        self.cash_cents = int(cash_cents)
 
     def balance_cents(self):
-        return self.cash
-
-    def credit_initial(self, cents):
-        self.cash += cents
-        return True
+        return self.cash_cents
 
     async def income(self, cents, reason, idem, salary=False):
         self.calls.append(("income", cents, reason, idem, salary))
@@ -58,12 +54,11 @@ def test_rent_and_utilities_once(env):
     asyncio.run(life.tick(dt.datetime(2026, 11, 1)))
     asyncio.run(life.tick(dt.datetime(2026, 11, 2)))
     expenses = [c for c in finance.calls if c[0] == "expense"]
-    names = [c[2] for c in expenses]
-    assert "房租" in names
-    assert {"水费", "电费", "燃气费", "宽带"} <= set(names)
-    # 再 tick 一次不重复扣
-    asyncio.run(life.tick(dt.datetime(2026, 11, 3)))
-    assert len([c for c in finance.calls if c[0] == "expense"]) == len(expenses)
+    reasons = [c[2] for c in expenses]
+    # 水电燃气宽带现在是逐项扣（水费/电费/燃气费/宽带），不是一笔
+    assert len(expenses) == 5
+    assert "房租" in reasons
+    assert {"水费", "电费", "燃气费", "宽带"} <= set(reasons)
 
 
 def test_house_skips_rent(env):
@@ -71,7 +66,8 @@ def test_house_skips_rent(env):
     repo.add_asset("house", "出租屋", 120000000)
     asyncio.run(life.tick(dt.datetime(2026, 11, 1)))
     reasons = [c[2] for c in finance.calls if c[0] == "expense"]
-    assert "房租" not in reasons and "电费" in reasons
+    assert "房租" not in reasons
+    assert {"水费", "电费", "燃气费", "宽带"} <= set(reasons)
 
 
 def test_failed_payment_does_not_mark_settled(env):

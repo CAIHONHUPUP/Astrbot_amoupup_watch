@@ -7,10 +7,16 @@ from __future__ import annotations
 
 import time
 
+try:
+    from .memory import MemoryIndex
+except ImportError:  # 直接按文件加载时
+    from memory import MemoryIndex
+
 
 class FinanceRepo:
     def __init__(self, store):
         self.store = store
+        self.memory = MemoryIndex(store)
 
     # ---------- 持仓 ----------
     def positions(self, kind=""):
@@ -140,6 +146,11 @@ class FinanceRepo:
             )
         return self.store.write("UPDATE loans SET balance_cents=? WHERE id=?", (int(balance_cents), int(loan_id)))
 
+    def loan(self, kind):
+        rows = self._rows("SELECT * FROM loans WHERE kind=? AND balance_cents>0 "
+                          "ORDER BY ts DESC, id DESC LIMIT 1", (str(kind),))
+        return rows[0] if rows else None
+
     def loans(self):
         return self._rows("SELECT * FROM loans ORDER BY ts DESC")
 
@@ -148,6 +159,10 @@ class FinanceRepo:
             "INSERT INTO assets(kind, label, value_cents, ts) VALUES(?,?,?,?)",
             (str(kind), str(label or ""), int(value_cents), time.time()),
         )
+
+    def asset(self, kind):
+        rows = self._rows("SELECT * FROM assets WHERE kind=? ORDER BY ts DESC, id DESC LIMIT 1", (str(kind),))
+        return rows[0] if rows else None
 
     def assets(self):
         return self._rows("SELECT * FROM assets ORDER BY ts DESC")
@@ -179,6 +194,47 @@ class FinanceRepo:
     # ---------- 幂等 ----------
     def settled(self, period, kind):
         return bool(self._rows("SELECT 1 FROM settlements WHERE day=? AND kind=?", (str(period), str(kind))))
+
+    def settlements(self, period=""):
+        """当月结算流水（房租/水/电/燃气/宽带），面板生活账单用。"""
+        if period:
+            return self._rows("SELECT day, kind, payload, created_at FROM settlements WHERE day=? "
+                              "ORDER BY kind", (str(period),))
+        return self._rows("SELECT day, kind, payload, created_at FROM settlements ORDER BY day DESC, kind")
+
+    # ---------- 日常开销流水 ----------
+    def add_expense(self, idem, day, category, label, amount_cents):
+        return bool(self.store.write(
+            "INSERT OR IGNORE INTO expenses(idem, day, category, label, amount_cents, ts) "
+            "VALUES(?,?,?,?,?,?)",
+            (str(idem), str(day), str(category or ""), str(label or ""), int(amount_cents), time.time())))
+
+    def expenses(self, day="", period=""):
+        if day:
+            return self._rows("SELECT * FROM expenses WHERE day=? ORDER BY id DESC", (str(day),))
+        if period:
+            return self._rows("SELECT * FROM expenses WHERE day LIKE ? ORDER BY id DESC",
+                              (str(period) + "%",))
+        return self._rows("SELECT * FROM expenses ORDER BY id DESC LIMIT 200")
+
+    def expense_totals(self, period):
+        return self._rows("SELECT category, SUM(amount_cents) AS total, COUNT(*) AS n "
+                          "FROM expenses WHERE day LIKE ? GROUP BY category", (str(period) + "%",))
+
+    def add_salary_item(self, period, kind, label, amount_cents):
+        return self.store.write(
+            "INSERT INTO salary_items(period, kind, label, amount_cents, ts) VALUES(?,?,?,?,?)",
+            (str(period), str(kind or ""), str(label or ""), int(amount_cents), time.time()),
+        )
+
+    def salary_items(self, period):
+        return self._rows("SELECT period, kind, label, amount_cents, ts FROM salary_items "
+                          "WHERE period=? ORDER BY id", (str(period),))
+
+    def meta_keys(self, prefix=""):
+        """按前缀取 meta 键：用来数「今天已经跑过哪些决策时点」。"""
+        rows = self._rows("SELECT k FROM meta WHERE k LIKE ?", (str(prefix) + "%",))
+        return [str(r["k"]) for r in rows]
 
     def mark_settled(self, period, kind, payload="{}"):
         return self.store.write(

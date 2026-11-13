@@ -24,13 +24,16 @@ except Exception:  # 离线单测
     logger = logging.getLogger("watch")
 
 try:
-    from .finance_memory import MemoryLink
-    from .finance_mood import expense_level, income_level, low_balance_level, pnl_level, word_for_score, yuan
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
-    from finance_memory import MemoryLink
-    from finance_mood import expense_level, income_level, low_balance_level, pnl_level, word_for_score, yuan
+    from ..utils.mood import (expense_level, income_level, low_balance_level, pnl_level,
+                               reaction_line, word_for_score, yuan)
+    from ..guard import isolated
+    from .memory_link import MemoryLink
+except ImportError:  # 按顶层包/单文件加载时
+    from utils.mood import (expense_level, income_level, low_balance_level, pnl_level,
+                              reaction_line, word_for_score, yuan)
     from guard import isolated
+    from core.memory_link import MemoryLink
+
 
 AMO_PLUGIN_NAME = "Astrbot_amoupup_forever"
 
@@ -76,6 +79,17 @@ class FinanceLink:
         except Exception as exc:
             isolated("finance.withdrawable", exc)
             return None
+
+    def ledger(self, limit=200):
+        """只读流水：面板生活账单要按原因分类，读 amo 公开的 wallet.ledger()，不碰表。"""
+        amo = self._amo()
+        if amo is None:
+            return []
+        try:
+            return list(amo.wallet.ledger(int(limit)) or [])
+        except Exception as exc:
+            isolated("finance.ledger", exc)
+            return []
 
     def transfer_in(self, amount_cents, idem):
         """用户转账：可用和可取同时增加（银行入账，不是卖出）。"""
@@ -268,7 +282,8 @@ class FinanceLink:
                     reason or "收到一笔钱", yuan(amount_cents), before, after))
         return {"ok": bool(steps.get("wallet")), "mood": after, "steps": steps}
 
-    async def expense(self, amount_cents, reason, idem, necessary=False):
+    async def expense(self, amount_cents, reason, idem, necessary=False, quiet=False):
+        """quiet=True：日常逐笔消费——只写小日记，不进长期记忆（日终按分类汇总再记）。"""
         amo = self._amo()
         if amo is None:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
@@ -288,11 +303,14 @@ class FinanceLink:
         if necessary:
             steps["schedule"] = self._schedule(amo, "支出", amount_cents, before, after, reason)
         steps["diary"] = self._small_diary(amo, "今天%s，花了 %s。%s" % (
-            reason or "有笔开销", yuan(amount_cents), level["word"] or "还行"))
+            reason or "有笔开销", yuan(amount_cents),
+            reaction_line(level["word"] or after, idem)))
         when = time.strftime("%Y-%m-%d %H:%M")
-        text = "%s %s 花了 %s，扣款后余额 %s，%s。" % (
-            when, reason or "一笔开销", yuan(amount_cents), self._balance_text(amo), after)
-        steps["memory"] = await self._tier("long", text, idem + ":mem", tag="expense")
+        text = "%s %s 花了 %s，扣款后余额 %s。%s。" % (
+            when, reason or "一笔开销", yuan(amount_cents), self._balance_text(amo),
+            reaction_line(after, idem))
+        if not quiet:
+            steps["memory"] = await self._tier("long", text, idem + ":mem", tag="expense")
         return {"ok": True, "mood": after, "steps": steps}
 
     async def trade_pnl(self, pnl_cents, ratio, symbol, idem):
@@ -342,6 +360,58 @@ class FinanceLink:
             time.strftime("%Y-%m-%d %H:%M"), yuan(amount_cents), months, after)
         steps["memory"] = await self._tier("permanent", text, idem + ":mem")
         return {"ok": bool(steps.get("wallet")), "mood": after, "steps": steps}
+
+    def nudge_mood(self, deltas, idem):
+        """按情绪维度加/减心情（涨薪、扣钱用）。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            return bool(self._nudge(amo, str(idem), deltas))
+        except Exception as exc:
+            isolated("finance.nudge", exc)
+            return False
+
+    async def long_memory(self, text, idem):
+        """长期层记忆：日记账按天汇总用（不把每笔都塞进去）。"""
+        return await self._tier("long", str(text), str(idem), tag="expense")
+
+    async def permanent_memory(self, text, idem):
+        """永久层记忆：买房、还贷这种一辈子的事。"""
+        return await self._tier("permanent", str(text), str(idem))
+
+    def small_diary(self, text):
+        """小日记：只写感受，不写长篇。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        return self._small_diary(amo, str(text))
+
+    def add_schedule(self, day, activity, detail="", place="家", category="leave"):
+        """往 amo 当天日程里追加一条（整天事项用 00:00–23:59）。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            item = {
+                "start": "00:00", "end": "23:59",
+                "activity": str(activity), "place": str(place),
+                "category": str(category), "detail": str(detail or activity),
+                "subject": "bot", "status": "leave",
+            }
+            result = amo.state.add_schedule_item(str(day), item, source="watch",
+                                                 reason=str(activity))
+            return bool(isinstance(result, dict) and result.get("changed", True))
+        except Exception as exc:
+            isolated("finance.schedule", exc)
+            return False
+
+    def long_diary(self, text):
+        """长篇日记（amo 只写当天那一篇，一天只写一次）。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        return self._long_diary(amo, str(text))
 
     async def remember_event(self, kind, amount_cents, text, idem):
         """通用事件记忆（求助、资金紧张等）。"""

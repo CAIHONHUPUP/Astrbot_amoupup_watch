@@ -96,7 +96,7 @@ def test_B_heavy_task_does_not_block_loop(tmp_path, monkeypatch):
 
 
 def test_C_missing_dir_bootstraps(tmp_path):
-    from store import Store
+    from models.db import Store
 
     s = Store(root=tmp_path / "brand-new", min_free_mb=0)
     info = s.init()
@@ -108,7 +108,7 @@ def test_C_missing_dir_bootstraps(tmp_path):
 
 
 def test_C_low_disk_degrades_readonly(tmp_path):
-    from store import Store
+    from models.db import Store
 
     s = Store(root=tmp_path / "d", min_free_mb=10 ** 9)  # 红线高到必然触发
     s.init()

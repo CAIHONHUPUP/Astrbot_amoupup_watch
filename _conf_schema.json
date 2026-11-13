@@ -1,4 +1,10 @@
 {
+  "city": {
+    "type": "string",
+    "description": "她所在城市（一线 1.5 / 二线 1.0 / 三线 0.75 物价）",
+    "default": "",
+    "hint": "留空则跟随 amo 的日程城市；也可以用 /城市 杭州 直接改。"
+  },
   "enabled": {
     "type": "bool",
     "description": "总开关（关闭后 amo 侧直接跳过，零开销）",

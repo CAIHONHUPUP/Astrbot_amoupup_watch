@@ -3,11 +3,29 @@
 > **我能永远守护你**（独立社会模拟插件，AstrBot v4）。她有自己的社交世界：谁找她、她跟谁熟、哪些事会传开。
 > **与 amo（Astrbot_amoupup_forever）只做握手接入，不进入 amo 代码库。**
 
-- 当前版本：**0.1.0（边界层已落地）**：guard / runtime / store / scheduler + 15 项单测；业务逻辑（world.py）还没写
+- 当前版本：**0.2.0（金融/生活/职场全链路）**：guard / runtime / store / scheduler + 15 项单测；业务逻辑（world.py）还没写
 - 跑测试：`pytest tests -q`（插件根目录放 PYTHONPATH）
 - 设计文档：[docs/ISOLATION-DESIGN.md](docs/ISOLATION-DESIGN.md)
 - 握手契约：[docs/HANDSHAKE.md](docs/HANDSHAKE.md)
 - 作者：彩虹upup
+
+## 目录结构（2026-11-13 分层重构，依赖单向）
+
+    Astrbot_amoupup_watch/
+    ├── main.py           入口：插件类 + 生命周期 + 指令 + LLM 工具 + 路由登记（≤480 行，有测试护栏）
+    ├── models/           数据层：db（连接/迁移）、ledger（资产/贷款/流水）、memory（记忆索引）
+    ├── services/         逻辑层：trade / market / candidates / life / daily / consume /
+    │                     expense / work / work_events / property / credit
+    ├── core/             决策层：agent_loop（三次自主决策）、llm_decider、amo_bridge、
+    │                     memory_link、memory_tier、scheduler、runtime
+    ├── utils/            工具层：城市系数、房价房租、金额取整、节假日、交易时段、稳定随机
+    ├── ui/               展示层：cards（面板字段）、views/守护/index.html（Web 面板）
+    ├── api/              接口层：handlers（面板/接口处理，ApiMixin）
+    └── guard.py          异常收口（所有层共用）
+
+依赖方向：main → api/ui → services/core → models → utils，禁止反向 import。
+根目录残留的 `finance_*.py` / `store.py` / `scheduler.py` 是兼容 shim（sys.modules 别名，
+指向真实实现），老代码与老测试零改动可用。
 
 ## 为什么单独开仓库
 

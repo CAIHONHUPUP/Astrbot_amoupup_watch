@@ -13,13 +13,13 @@ import json
 import random
 
 try:
-    from .finance_calendar import is_trading_day
-    from .finance_market import fetch_quotes
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
-    from finance_calendar import is_trading_day
-    from finance_market import fetch_quotes
+    from ..guard import isolated
+    from ..services.market_api import fetch_quotes
+    from ..utils.helpers import is_trading_day
+except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
+    from services.market_api import fetch_quotes
+    from utils.helpers import is_trading_day
 
 SLOTS = ((9, 30, "morning"), (11, 35, "noon"), (14, 50, "close"))
 CANDIDATES = ("600519", "000001", "300750", "600036")
@@ -130,7 +130,18 @@ class FinanceDecision:
                     codes.append(code)
         else:
             codes += list(CANDIDATES)
+        day = now.date().isoformat()
+        # 数据失败兜底：当天不再自主交易（只记日志，不写记忆/日记）
+        if self.repo.meta_get("news_fail:" + day):
+            return {"skipped": "data_failed",
+                    "decision": {"action": "hold", "reason": "今天行情/新闻拉取失败，先不交易"},
+                    "executed": {"ok": False, "message": "数据失败，今天不交易"}}
         quotes = await self._refresh(codes)
+        if not quotes:
+            self.repo.meta_set("news_fail:" + day, "quotes")
+            return {"skipped": "quotes_failed",
+                    "decision": {"action": "hold", "reason": "行情拉不到，今天先不动"},
+                    "executed": {"ok": False, "message": "行情失败，今天不交易"}}
         if self.pools is not None:
             self.pools.remember_names(quotes)
             observation = self.pools.observe(quotes, now.date().isoformat())
@@ -141,15 +152,23 @@ class FinanceDecision:
         mood = self.finance.mood()
         decision = None
         try:
-            from .finance_llm import llm_decide
+            from .llm_decider import llm_decide
         except ImportError:  # 直接按文件加载时
-            from finance_llm import llm_decide
+            from core.llm_decider import llm_decide
         news_text = ""
         self._news_used = False
         try:
-            from .finance_news import fetch_cls, fetch_eastmoney, merge_stock_news
+            fetched = int(self.repo.meta_get("news_fetch:" + day, 0) or 0)
+        except Exception:
+            fetched = 0
+        if fetched >= 3:      # 每天最多查三次（9:30 / 11:35 / 14:50）
+            return {"skipped": "news_quota",
+                    "decision": {"action": "hold", "reason": "今天新闻额度用完了"},
+                    "executed": {"ok": False, "message": "不重复查新闻"}}
+        try:
+            from ..services.news_api import fetch_cls, fetch_eastmoney, merge_stock_news
         except ImportError:  # 直接按文件加载时
-            from finance_news import fetch_cls, fetch_eastmoney, merge_stock_news
+            from services.news_api import fetch_cls, fetch_eastmoney, merge_stock_news
         try:
             market = await self.runtime.run_io(fetch_eastmoney, "财经", "global", 5, timeout=10) or []
             if not market:
@@ -167,8 +186,11 @@ class FinanceDecision:
                         await tm.remember("news", merged,
                                           "news:%s:%s" % (now.date().isoformat(), p["code"]),
                                           related=p["code"])
+            if not parts:
+                raise RuntimeError("news empty")
             news_text = "\n".join(parts)
             self._news_used = bool(news_text)
+            self.repo.meta_set("news_fetch:" + day, fetched + 1)
         except Exception as exc:
             isolated("finance.news.inject", exc)
         if self.plugin is not None:

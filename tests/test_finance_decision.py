@@ -5,11 +5,11 @@ import random
 
 import pytest
 
-from finance_consume import FinanceConsume
-from finance_decision import FinanceDecision
-from finance_help import FinanceHelp, amortization
-from finance_store import FinanceRepo
-from store import Store
+from services.consume_engine import FinanceConsume
+from core.agent_loop import FinanceDecision
+from services.credit_engine import FinanceHelp, amortization
+from models.ledger import FinanceRepo
+from models.db import Store
 
 
 class FakeFinance:
@@ -20,7 +20,7 @@ class FakeFinance:
     def balance_cents(self):
         return self.cash
 
-    async def expense(self, cents, reason, idem, necessary=False):
+    async def expense(self, cents, reason, idem, necessary=False, quiet=False):
         self.cash -= cents
         self.calls.append(("expense", cents, reason))
         return {"ok": True, "mood": "平静"}

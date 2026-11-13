@@ -10,8 +10,8 @@ import json
 import re
 
 try:
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
+    from ..guard import isolated
+except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
 
 SYSTEM = (

@@ -13,8 +13,8 @@ import re
 import time
 
 try:
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
+    from ..guard import isolated
+except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
 
 #: 平价底仓池：一手（100 股）大致 200–2000 元，适合她 2.3 万本金的体量。

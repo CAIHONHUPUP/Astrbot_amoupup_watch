@@ -9,7 +9,7 @@ import re
 import urllib.request
 
 try:
-    from .guard import isolated
+    from ..guard import isolated
 except ImportError:  # 直接按文件加载时
     from guard import isolated
 

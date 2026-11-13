@@ -4,17 +4,17 @@ import datetime as dt
 
 import pytest
 
-from finance_consume import FinanceConsume
-from finance_daily import FinanceDaily
-from finance_store import FinanceRepo
-from store import Store
+from services.consume_engine import FinanceConsume
+from services.daily_engine import FinanceDaily
+from models.ledger import FinanceRepo
+from models.db import Store
 
 
 class FakeFinance:
     def __init__(self):
         self.calls = []
 
-    async def expense(self, cents, reason, idem, necessary=False):
+    async def expense(self, cents, reason, idem, necessary=False, quiet=False):
         self.calls.append(("expense", cents, reason))
         return {"ok": True, "mood": "平静"}
 

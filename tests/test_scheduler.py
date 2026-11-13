@@ -1,7 +1,7 @@
 import asyncio
 
-from runtime import Runtime
-from scheduler import Scheduler
+from core.runtime import Runtime
+from core.scheduler import Scheduler
 
 
 def test_interval_fires_and_stops():

@@ -2,7 +2,7 @@
 import asyncio
 import json
 
-from finance_llm import llm_decide, parse_decision
+from core.llm_decider import llm_decide, parse_decision
 
 
 def test_parse_valid_buy():

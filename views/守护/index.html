@@ -57,6 +57,10 @@
   .right { text-align:right; }
   .empty { border:1px dashed var(--line); border-radius:14px; padding:22px 16px; text-align:center; color:var(--muted); font-size:13px; background:linear-gradient(180deg,#fbfdff,#f6fbff); }
   .empty span { font-size:11px; opacity:.8; }
+  .salary-head { cursor:pointer; }
+  .salary-head.open { border-bottom-color:#bfe3fa; }
+  .salary-sub { display:none; padding-left:10px; border-left:2px solid #dcecf9; margin:2px 0 8px; }
+  .salary-sub.show { display:block; }
   .bill { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px dashed #eaf6ff; font-size:13px; }
   .bill:last-child { border-bottom:0; }
   .bill .n { color:var(--muted); font-size:12px; }
@@ -146,7 +150,7 @@
     <div class="demo-note" id="lowNote"></div>
 
     <div class="tiles">
-      <div class="tile hero-tile"><div class="k">总资产</div><div class="v" id="f-total">¥—</div><div class="s">可用余额 + 持仓市值</div></div>
+      <div class="tile hero-tile"><div class="k">总资产</div><div class="v" id="f-total">¥—</div><div class="s">余额 + 持仓 + 房产车产 − 负债</div></div>
       <div class="tile"><div class="k">可用余额</div><div class="v" id="f-cash">¥—</div><div class="s">amo 记账 · 只读</div></div>
       <div class="tile"><div class="k">持仓市值</div><div class="v" id="f-mv">¥—</div><div class="s" id="f-mv-s">股票 + 基金</div></div>
       <div class="tile"><div class="k">今日盈亏</div><div class="v" id="f-pnl">—</div><div class="s" id="f-pnl-s">15:00 收盘更新</div></div>
@@ -188,6 +192,8 @@
       <div class="card">
         <div class="card-h"><h2>生活账单</h2><span class="tag">每月 1 日 / 15 日</span></div>
         <div id="lifeList"></div>
+        <div class="brief" id="expenseDetail" style="white-space:pre-line"></div>
+        <button class="ghost" id="expenseBtn" style="margin-top:8px">日常支出明细</button>
       </div>
       <div class="card">
         <div class="card-h"><h2>心情 · 财务</h2><span class="tag" id="moodTag">—</span></div>
@@ -306,10 +312,13 @@
 
 <script>
 (function () {
-  var API_DIAG = "/api/plug/Astrbot_amoupup_watch/diag";
-  var API_FIN = "/api/plug/Astrbot_amoupup_watch/finance";
-  var API_FIN_DEMO = "/api/plug/Astrbot_amoupup_watch/finance_demo";
-  var API_TRADE = "/api/plug/Astrbot_amoupup_watch/trade";
+  var PLUGIN = "Astrbot_amoupup_watch";
+  // 插件页里走 AstrBot bridge（endpoint 不带插件名、不带 /api 前缀）；
+  // 直接开页面时退回旧路径 /api/plug/<PLUGIN>/<name>。
+  var API_DIAG = "diag";
+  var API_FIN = "finance";
+  var API_FIN_DEMO = "finance_demo";
+  var API_TRADE = "trade";
   var fin = { mode: "real", pos: "stock", data: null };
 
   function q(id) { return document.getElementById(id); }
@@ -334,16 +343,51 @@
     if (v && typeof v === "object" && v.code !== undefined && v.data !== undefined) {
       return unwrapView(v.data);
     }
+    // bridge 转发回来的可能是 dashboard 的 {status:"ok", data:{...}} 信封
+    if (v && typeof v === "object" && v.status === "ok" && v.data !== undefined) {
+      return unwrapView(v.data);
+    }
     return v;
   }
-  function apiGet(url) {
-    return rawGet(url).catch(function () {
-      var view = window.AstrBotPluginView;
-      if (view && typeof view.apiGet === "function") {
-        return view.apiGet(url).then(unwrapView);
-      }
-      throw new Error("no bridge");
-    });
+  function bridgeView() {
+    var v = window.AstrBotPluginView || window.AstrBotPluginPage;
+    return v && typeof v.apiGet === "function" ? v : null;
+  }
+  function embedded() {
+    try { return !!window.parent && window.parent !== window; } catch (e) { return false; }
+  }
+  function bridgeName(name) { return String(name == null ? "" : name).replace(/^\/+/, ""); }
+  function restUrl(name) {
+    var tail = bridgeName(name);
+    return "/api/plug/" + PLUGIN + (tail ? "/" + tail : "");
+  }
+  function apiGet(name) {
+    var view = bridgeView();
+    if (view && embedded()) {
+      return view.apiGet(bridgeName(name)).then(unwrapView)
+        .catch(function () { return rawGet(restUrl(name)); });
+    }
+    // 直接打开页面（不在面板 iframe 里）没有 dashboard token，请求必然 401；
+    // 这里快速失败，避免 postMessage 发给自己后一直挂着。
+    return rawGet(restUrl(name));
+  }
+  function rawPost(url, payload) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify(payload || {})
+    })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(unwrapView);
+  }
+  function apiPost(name, payload) {
+    var view = bridgeView();
+    if (view && typeof view.apiPost === "function" && embedded()) {
+      return view.apiPost(bridgeName(name), payload || {}).then(unwrapView)
+        .catch(function () { return rawPost(restUrl(name), payload); });
+    }
+    return rawPost(restUrl(name), payload);
   }
   function authHeaders() {
     var h = { "Accept": "application/json" };
@@ -424,16 +468,75 @@
     host.innerHTML = '<table class="pos"><thead><tr><th>名称</th><th>持仓</th><th>成本</th><th>现价</th><th>盈亏</th><th>盈亏%</th><th></th></tr></thead><tbody>' + rows + "</tbody></table>";
   }
 
+  function renderExpense(life) {
+    var box = q("expenseDetail");
+    if (!box) return;
+    var cats = (life.expense_categories || []).filter(function (c) { return Number(c.amount || 0) > 0; });
+    if (!cats.length) {
+      box.textContent = "本月还没有日常开销";
+      return;
+    }
+    var total = 0;
+    var lines = cats.map(function (c) { total += Number(c.amount || 0); return c.label + "：" + money(c.amount); });
+    lines.push("合计：" + money(total));
+    box.textContent = lines.join("\n");
+  }
+
   function renderLife(life) {
-    var rows = [
-      ["工资", "每月 " + (life.salary_day || 15) + " 日", money(life.salary || 0), life.next_salary ? "下次 " + life.next_salary : "待结算"],
-      ["房租", "每月 " + (life.rent_day || 1) + " 日", money(life.rent || 0), life.rent ? "无房时 800–2500" : "有房不扣"],
-      ["水电燃气", "每月 1 日", money(life.utilities || 0), "100–800 区间"],
-      ["本月支出", "饮食 · 交通 · 人情", money(life.month_expense || 0), "按现实物价"]
-    ];
-    q("lifeList").innerHTML = rows.map(function (r) {
+    // 账单跟着她的资产状态走：租房才有房租，有房才有物业费/房贷，有车才有车贷/养车
+    var rows = [];
+    var salary = salaryBlock(life);
+    if (!life.has_house) {
+      rows.push(["房租", "每月 " + (life.rent_day || 1) + " 日", money(life.rent || 0),
+        life.rent ? "本月已扣" : "有房不扣"]);
+    }
+    if (life.has_house) {
+      rows.push(["物业费", "每月 1 日", money(life.property_fee || 0), "80 平 · 1.5–3 元/平/月"]);
+    }
+    if (Number(life.mortgage || 0) > 0) {
+      rows.push(["房贷", "每月 1 日", money(life.mortgage), "剩余 " + money(life.mortgage_balance || 0)]);
+    }
+    rows.push(["水电燃气", "每月 1 日", money(life.utilities || 0),
+      life.utilities ? "本月已结算" : "100–800 区间"]);
+    if (Number(life.car_loan || 0) > 0) {
+      rows.push(["车贷", "每月 1 日", money(life.car_loan), "剩余 " + money(life.car_loan_balance || 0)]);
+    }
+    if (life.has_car) {
+      rows.push(["养车费用", "每月 1 日", money(life.car_cost || 0), "油费 · 停车 · 保险保养"]);
+    }
+    rows.push(["所在城市", (life.city || "未设置") + " · " + (life.tier || "未设置") + " · 物价 ×" + (life.factor || 1),
+      money(life.rent || 0), "房租基线"]);
+    rows.push(["本月日常支出", "餐饮 · 交通 · 日用 · 人情", money(life.month_expense || 0), "逐笔扣款"]);
+    renderExpense(life);
+    q("lifeList").innerHTML = salary.head + salary.detail + rows.map(function (r) {
       return '<div class="bill"><div><div>' + r[0] + '</div><div class="n">' + r[1] + '</div></div><div class="right"><div>' + r[2] + '</div><div class="n">' + r[3] + '</div></div></div>';
     }).join("");
+  }
+
+  // 工资折叠：实发工资打头，点开才是基本工资和本月各项调整
+  function salaryBlock(life) {
+    var base = Number(life.salary || 0);
+    var net = Number(life.salary_net === undefined ? base : life.salary_net);
+    var items = life.salary_items || [];
+    var head = '<div class="bill salary-head" id="salaryHead">'
+      + '<div><div>实发工资</div><div class="n">基本 + 奖金 − 扣款 · ' + (items.length + 1) + ' 项，点开看明细</div></div>'
+      + '<div class="right"><div>' + money(net) + '</div><div class="n">'
+      + (life.salary_paid ? "已到账" : "15 日到账") + ' ▾</div></div></div>';
+    var sub = '<div class="bill"><div><div>基本工资</div><div class="n">每月 '
+      + (life.salary_day || 15) + ' 日</div></div><div class="right"><div>' + money(base)
+      + '</div><div class="n">' + (life.salary_paid ? "已发" : "15 日发") + '</div></div></div>';
+    items.forEach(function (it) {
+      var amt = Number(it.amount || 0);
+      sub += '<div class="bill"><div><div>' + esc(it.label || "调整") + '</div><div class="n">'
+        + (amt >= 0 ? "奖金" : "扣款") + '</div></div><div class="right"><div class="'
+        + (amt >= 0 ? "up" : "") + '">' + (amt >= 0 ? "+" : "") + money(amt)
+        + '</div><div class="n">本月明细</div></div></div>';
+    });
+    if (life.thrifty_until) {
+      sub += '<div class="bill"><div><div>省钱模式</div><div class="n">扣钱之后先省着花</div></div>'
+        + '<div class="right"><div>至 ' + esc(life.thrifty_until) + '</div><div class="n">少外卖 · 自己做饭</div></div></div>';
+    }
+    return { head: head, detail: '<div class="salary-sub" id="salarySub">' + sub + '</div>' };
   }
 
   function renderMood(mood) {
@@ -475,7 +578,12 @@
     q("p-house-term").textContent = (h.years && h.years.length) ? (h.years.join(" / ") + " 年") : "10 / 20 / 30 年";
     q("p-house-month").textContent = h.monthly ? ("月供 " + money(h.monthly)) : "—";
     q("p-car-v").textContent = c.price ? (money(c.price) + " · " + (c.years || 5) + " 年") : "—";
-    q("planTag").textContent = (p.deposit || 0) >= (h.price || Infinity) ? "存款够全款" : "存款够再考虑";
+    if (h.owned && c.owned) q("planTag").textContent = "房子车子都有了";
+    else if (h.owned) q("planTag").textContent = "已有房 · 还没车";
+    else if (c.owned) q("planTag").textContent = "已有车 · 还没房";
+    else if (h.price && (p.deposit || 0) >= (h.price * (h.down_pct || 30) / 100)) q("planTag").textContent = "首付够了";
+    else q("planTag").textContent = "存款够再考虑";
+    if (c.price) q("p-car-v").textContent = (c.owned ? "已有 · " : "") + money(c.price) + " · " + (c.years || 5) + " 年";
     if (p.rule) q("p-rule").textContent = p.rule;
   }
   function renderDecision(decision) {
@@ -561,8 +669,11 @@
     apiGet(fin.mode === "demo" ? API_FIN_DEMO : API_FIN)
       .then(renderFinance)
       .catch(function () {
-        q("finHint").textContent = "后端未就绪，显示占位";
         renderFinance({ mode: "real", wallet: {}, positions: [], trades: [], life: {}, mood: {}, market: {}, bank: {}, plan: {} });
+        // renderFinance 会写「数据来自 amo 账本」，占位时改成说明当前拿不到数据的真实原因
+        q("finHint").textContent = embedded()
+          ? "后端未就绪，显示占位"
+          : "请从 AstrBot 面板打开：插件 →「我能永远守护你」→ 守护视图";
         initCollapsible();
       });
   }
@@ -580,6 +691,17 @@
     fin.pos = b.dataset.pos;
     q("posSeg").querySelectorAll("button").forEach(function (x) { x.classList.toggle("active", x === b); });
     renderPositions();
+  });
+  q("lifeList").addEventListener("click", function (e) {
+    var head = e.target.closest("#salaryHead");
+    if (!head) return;
+    q("salarySub").classList.toggle("show");
+    head.classList.toggle("open");
+  });
+  q("expenseBtn").addEventListener("click", function () {
+    var box = q("expenseDetail");
+    box.classList.toggle("show");
+    q("expenseBtn").textContent = box.classList.contains("show") ? "收起日常支出明细" : "日常支出明细";
   });
   q("briefBtn").addEventListener("click", function () {
     var b = q("brief");
@@ -640,8 +762,7 @@
   q("sheetClose").addEventListener("click", function () { closeSheet(true); });
   q("sheetSubmit").addEventListener("click", function () {
     var payload = { action: sheet.act, code: q("tCode").value.trim(), qty: q("tQty").value.trim(), price: q("tPrice").value.trim() };
-    fetch(API_TRADE, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-      .then(function (r) { return r.json(); })
+    apiPost(API_TRADE, payload)
       .then(function (d) { toast((d && (d.message || (d.data && d.data.message))) || "已提交"); })
       .catch(function () { toast("交易后端未接入"); });
   });
@@ -663,7 +784,9 @@
       var p = q("pill"); p.textContent = d.status === "ready" ? "运行中" : (d.status || "未知");
       p.className = "pill " + (d.status === "ready" ? "ok" : "bad");
     }).catch(function () {
-      var p = q("pill"); p.textContent = "后端未就绪"; p.className = "pill bad";
+      var p = q("pill");
+      p.textContent = embedded() ? "后端未就绪" : "请从 AstrBot 插件页打开";
+      p.className = "pill bad";
       set("s-updated", "状态接口拉取失败");
     });
   }
@@ -699,10 +822,19 @@
     });
   }
 
-  loadFinance();
-  refreshStatus();
-  initCollapsible();
-  setInterval(refreshStatus, 15000);
+  function startPage() {
+    loadFinance();
+    refreshStatus();
+    initCollapsible();
+    setInterval(refreshStatus, 15000);
+  }
+  // bridge SDK 由 AstrBot 注入在页面末尾，内联脚本执行时还读不到；
+  // 等 DOM 就绪（SDK 已执行）再拉数据，否则首发请求会 401 → 显示「后端未就绪」。
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startPage);
+  } else {
+    startPage();
+  }
 })();
 </script>
 </body>

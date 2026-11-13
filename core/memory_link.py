@@ -18,8 +18,8 @@ except Exception:  # 离线单测
     logger = logging.getLogger("watch")
 
 try:
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
+    from ..guard import isolated
+except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
 
 AMO_PLUGIN_NAME = "Astrbot_amoupup_forever"

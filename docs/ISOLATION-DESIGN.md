@@ -218,17 +218,3 @@ reload = 新实例 `__init__` + 旧实例 `terminate()`；旧实例一卡，重�
     ├── world.py           # 社会模拟核心                v0.2+
     ├── docs/              # 本目录两份文档
     └── tests/             # 验收 A-D 的自动化
-
-## 9. 验收记录（2026-11-13，线上 amo 6.9.4 + watch 0.1.0）
-
-| 项 | 结果 | 证据 |
-|---|---|---|
-| A 异常隔离 | ✅ | `/watch test raise` → 日志仅 1 条 `[WATCH] isolated scope=handler.watch ... count=1 trace_id=9fbf72`；回复 `[WATCH] 命令出错已被隔离，amo 不受影响`；amo 无 ERROR |
-| B 10 秒重任务 | ✅ | `/watch test busy 10` → `samples=532 p99=0.025s max=0.025s hits=0`，事件循环零卡顿 |
-| C 删数据目录 | ✅ | 目录改名后重载：自动重建 social.db、`store ready`、amo 正常 |
-| D 热重载 3 次 | ✅ | 每次 `scheduler stopped=1 survivors=0`，generation 每次不同；单测另证任务数回 0、结算只生效一次 |
-
-命令入口实测（同一次会话）：
-
-    [我能永远守护你] 0.1.0 gen=5a1802be status=ready
-    busy 10.0s mode=good lag={'samples': 532, 'p99': 0.025, 'max': 0.025, 'hits': 0}

@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from store import Store
+from models.db import Store
 
 
 def test_path_escape_rejected(tmp_path):

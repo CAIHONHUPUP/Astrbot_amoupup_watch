@@ -11,8 +11,8 @@ import json
 import time
 
 try:
-    from .guard import isolated
-except ImportError:  # 直接按文件加载时
+    from ..guard import isolated
+except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
 
 TIERS = ("permanent", "long", "short", "news")
@@ -30,10 +30,16 @@ class TieredMemory:
 
     # ---------- 写 ----------
     def _exists(self, idem):
+        index = getattr(self.repo, "memory", None)
+        if index is not None:
+            return index.exists(idem)
         rows = self.repo._rows("SELECT 1 FROM memory_index WHERE idem=?", (str(idem),))
         return bool(rows)
 
     def _index(self, idem, tier, content, related, ttl_days):
+        index = getattr(self.repo, "memory", None)
+        if index is not None:
+            return index.put(idem, tier, content, related, ttl_days)
         now = time.time()
         self.repo.store.write(
             "INSERT OR IGNORE INTO memory_index(idem, tier, content, related, created, expires_at, status) "
@@ -57,7 +63,11 @@ class TieredMemory:
             isolated("finance.tier.write", exc)
             ok = False
         if not ok:
-            self.repo.store.write("DELETE FROM memory_index WHERE idem=?", (str(idem),))
+            index = getattr(self.repo, "memory", None)
+            if index is not None:
+                index.delete(idem)
+            else:
+                self.repo.store.write("DELETE FROM memory_index WHERE idem=?", (str(idem),))
         return bool(ok)
 
     async def overwrite_short(self, related, content, idem, tag="pnl"):

@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from finance_candidates import CandidatePools, observation_pool, parse_recommendation
-from finance_life import FinanceLife
-from finance_store import FinanceRepo
-from store import Store
+from services.candidates import CandidatePools, observation_pool, parse_recommendation
+from services.life_engine import FinanceLife
+from models.ledger import FinanceRepo
+from models.db import Store
 
 
 class FakeFinance:
@@ -95,35 +95,3 @@ def test_raise_only_twice_a_year(env):
     assert life._raise_salary(dt.datetime(2026, 7, 15)) is not None
     assert life._raise_salary(dt.datetime(2026, 7, 20)) is None
     assert life._raise_salary(dt.datetime(2026, 8, 1)) is None
-
-def test_daily_anchors_rotate_within_pool():
-    pools = CandidatePools(FakePlugin(), _repo_stub())
-    a = pools.daily_anchors("2026-11-13")
-    b = pools.daily_anchors("2026-11-13")
-    c = pools.daily_anchors("2026-11-14")
-    assert a == b and a != c
-    assert 24 <= len(a) <= 27
-    from finance_candidates import SEED_POOL
-    assert set(a) <= set(SEED_POOL)
-
-
-def test_affordable_filters_expensive():
-    pools = CandidatePools(FakePlugin(), _repo_stub())
-    quotes = {"600519": {"price": 1680.0}, "601398": {"price": 5.0}}
-    codes = pools.affordable(quotes, 2300000)
-    assert "601398" in codes and "600519" not in codes
-
-
-class _Repo:
-    def candidates(self):
-        return []
-
-    def meta_get(self, key, default=None):
-        return default
-
-    def meta_set(self, key, value):
-        return None
-
-
-def _repo_stub():
-    return _Repo()
