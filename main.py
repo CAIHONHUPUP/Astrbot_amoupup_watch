@@ -163,9 +163,91 @@ class WatchPlugin(Star):
             return
         try:
             register("/Astrbot_amoupup_watch/diag", self._api_diag, ["GET"], "守护面板：运行状态")
+            register("/Astrbot_amoupup_watch/finance", self._api_finance, ["GET"], "守护面板：金融")
+            register("/Astrbot_amoupup_watch/finance_demo", self._api_finance_demo, ["GET"], "守护面板：金融演示数据")
+            register("/Astrbot_amoupup_watch/trade", self._api_trade, ["POST"], "守护面板：下单")
             logger.info("[WATCH] web api /api/plug/Astrbot_amoupup_watch/diag 已注册")
         except Exception as exc:
             isolated("web.register", exc)
+
+    def _finance_snapshot(self, demo: bool = False) -> dict:
+        """金融概览：真实数据要等账本/持仓接入，这里先把契约定下来。"""
+        if demo:
+            return {
+                "mode": "demo",
+                "wallet": {"total": 128430.22, "available": 23180.22, "market_value": 105250.0,
+                           "today_pnl": 3746.0, "today_pct": 3.69},
+                "positions": [
+                    {"kind": "stock", "code": "600519", "name": "贵州茅台", "qty": 100, "cost": 1600.0,
+                     "price": 1650.0, "pnl": 5000.0, "pnl_pct": 3.13},
+                    {"kind": "stock", "code": "300750", "name": "宁德时代", "qty": 500, "cost": 180.0,
+                     "price": 176.0, "pnl": -2000.0, "pnl_pct": -2.22},
+                    {"kind": "fund", "code": "005827", "name": "易方达蓝筹", "qty": 12345.67, "cost": 2.10,
+                     "price": 2.18, "pnl": 987.65, "pnl_pct": 3.81},
+                    {"kind": "fund", "code": "110020", "name": "沪深300ETF联接", "qty": 8000, "cost": 1.30,
+                     "price": 1.27, "pnl": -240.0, "pnl_pct": -2.31},
+                ],
+                "trades": [
+                    {"day": "11-13 10:32", "kind": "买入", "target": "600519 贵州茅台", "amount": -160000, "fee": 45.0, "note": "100 股"},
+                    {"day": "11-12 15:00", "kind": "赎回", "target": "110020 沪深300ETF联接", "amount": 2540.0, "fee": 12.7, "note": "T+1 确认"},
+                    {"day": "11-15 09:00", "kind": "工资", "target": "工资到账", "amount": 6800.0, "fee": 0, "note": "每月 15 日"},
+                ],
+                "life": {"salary": 6800, "salary_day": 15, "next_salary": "2026-12-15",
+                         "rent": 0, "rent_day": 1, "utilities": 320, "month_expense": 2870.0},
+                "mood": {"score": 68, "dominant": "开心", "last_event": "茅台止盈 +¥5,000"},
+                "market": {"checks": 1, "limit": 2, "last": "15:00 收盘已更新", "source": "腾讯 qt.gtimg.cn"},
+                "bank": {"debt": 452000.0, "monthly": 2380.0, "rate": 3.1, "limit": 120000.0,
+                         "items": [{"kind": "房贷", "balance": 452000.0, "rate": 3.1, "years": 30}],
+                         "note": "房贷剩余 452,000 · 3.1% · 月供 2,380"},
+                "plan": {"deposit": 23180.22, "invest_cap": 50,
+                         "house": {"price": 1200000, "down_pct": 30, "years": [10, 20, 30], "monthly": 3580},
+                         "car": {"price": 120000, "years": 5},
+                         "rule": "她不会买买不起的；投资不超过存款 50%；存款够全款才考虑全款"},
+            }
+        return {
+            "mode": "real",
+            "wallet": {"total": 0, "available": 0, "market_value": 0, "today_pnl": 0, "today_pct": 0},
+            "positions": [], "trades": [],
+            "life": {"salary": 6800, "salary_day": 15, "next_salary": "", "rent": 0,
+                     "rent_day": 1, "utilities": 0, "month_expense": 0},
+            "mood": {"score": None, "dominant": "", "last_event": ""},
+            "market": {"checks": 0, "limit": 2, "last": "", "source": "腾讯 qt.gtimg.cn"},
+            "bank": {"debt": 0, "monthly": 0, "rate": 0, "limit": 0, "items": [], "note": "没钱时可以先贷款，或找他转账"},
+            "plan": {"deposit": 0, "invest_cap": 50,
+                     "house": {"price": 0, "down_pct": 30, "years": [10, 20, 30], "monthly": 0},
+                     "car": {"price": 0, "years": 5},
+                     "rule": "她不会买买不起的；投资不超过存款 50%；存款够全款才考虑全款"},
+        }
+
+    async def _api_finance_demo(self, request=None):
+        try:
+            return self._finance_snapshot(demo=True)
+        except Exception as exc:
+            isolated("web.finance_demo", exc)
+            return {"status": "error", "message": "demo failed"}
+
+    async def _api_finance(self, request=None):
+        try:
+            demo = False
+            try:
+                raw = str(getattr(request, "url", "") or "")
+                query = getattr(request, "query_params", None)
+                if query:
+                    raw += " " + str(dict(query))
+                demo = "demo=1" in raw
+            except Exception:
+                pass
+            return self._finance_snapshot(demo=demo)
+        except Exception as exc:
+            isolated("web.finance", exc)
+            return {"status": "error", "message": "finance failed"}
+
+    async def _api_trade(self, request=None):
+        try:
+            return {"ok": False, "message": "交易后端未接入（账本/持仓模块还在施工）"}
+        except Exception as exc:
+            isolated("web.trade", exc)
+            return {"ok": False, "message": "trade failed"}
 
     async def _api_diag(self, request=None):
         try:
