@@ -78,6 +78,7 @@ class WatchPlugin(Star):
         self.runtime.start_watchdog()
         self.scheduler = Scheduler(self.runtime)
         self.scheduler.every("heartbeat", 300, self._heartbeat)
+        self._register_web()
         logger.info("[WATCH] loaded %s (%s) api=%s generation=%s",
                     PLUGIN_VERSION, DISPLAY_NAME, API_VERSION, self.runtime.generation)
 
@@ -153,6 +154,25 @@ class WatchPlugin(Star):
                 isolated("port.diag.store", exc)
                 out["store"] = {"error": type(exc).__name__}
         return out
+
+    # ---------------- Web 面板 ----------------
+    def _register_web(self):
+        context = getattr(self, "context", None)
+        register = getattr(context, "register_web_api", None) if context else None
+        if not callable(register):
+            return
+        try:
+            register("/Astrbot_amoupup_watch/diag", self._api_diag, ["GET"], "守护面板：运行状态")
+            logger.info("[WATCH] web api /api/plug/Astrbot_amoupup_watch/diag 已注册")
+        except Exception as exc:
+            isolated("web.register", exc)
+
+    async def _api_diag(self, request=None):
+        try:
+            return await self.diag()
+        except Exception as exc:
+            isolated("web.diag", exc)
+            return {"status": "error", "message": "diag failed"}
 
     # ---------------- 命令（入口，必须被隔离） ----------------
     def _fmt_diag(self, data: dict) -> str:

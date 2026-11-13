@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-store">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我能永远守护你</title>
+<style>
+  :root { --bg:#eef8ff; --bg2:#e2f2ff; --card:#ffffff; --text:#2b3440; --muted:#7b8794;
+          --line:#dcecf9; --accent:#0ea5e9; --soft:#f2faff; --night:#0b1020; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:linear-gradient(180deg,var(--bg) 0%,var(--bg2) 100%); background-attachment:fixed;
+         color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; font-size:14px; }
+  header { padding:14px 18px; background:rgba(255,255,255,.82); backdrop-filter:blur(12px);
+           border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.5px; }
+  .badge { font-size:11px; color:var(--muted); padding-left:2px; }
+  .pill { margin-left:auto; font-size:11px; padding:4px 10px; border-radius:999px; border:1px solid var(--line);
+          color:var(--muted); background:var(--soft); white-space:nowrap; }
+  .pill.ok { color:#0f766e; border-color:#bfeee9; background:#effcf9; }
+  .pill.bad { color:#b45309; border-color:#fde3bd; background:#fff8ed; }
+  nav { display:flex; gap:8px; padding:12px 18px 0; overflow-x:auto; }
+  nav button { border:1px solid var(--line); background:var(--card); color:var(--text); padding:8px 16px;
+               border-radius:12px; font-size:13px; cursor:pointer; white-space:nowrap;
+               box-shadow:0 1px 2px rgba(30,80,130,.04); transition:.15s; }
+  nav button:hover { border-color:#bfe3fa; background:var(--soft); }
+  nav button.active { border-color:var(--accent); color:var(--accent); background:#f0faff; font-weight:600; }
+  main { padding:14px 18px 44px; max-width:1080px; margin:0 auto; }
+  .panel { display:none; }
+  .panel.active { display:block; animation:fade .18s ease; }
+  @keyframes fade { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:12px 14px;
+          box-shadow:0 6px 18px rgba(30,90,150,.05); }
+  .tile .k { font-size:12px; color:var(--muted); }
+  .tile .v { font-size:22px; font-weight:650; margin-top:6px; letter-spacing:.3px; }
+  .tile .s { font-size:11px; color:var(--muted); margin-top:4px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:16px; margin-bottom:12px;
+          box-shadow:0 6px 20px rgba(30,90,150,.06); }
+  .card-h { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+  .card-h h2 { font-size:14px; margin:0; font-weight:600; }
+  .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:2px 8px; background:var(--soft); }
+  .empty { border:1px dashed var(--line); border-radius:14px; padding:22px 16px; text-align:center; color:var(--muted); font-size:13px; background:linear-gradient(180deg,#fbfdff,#f6fbff); }
+  .empty span { font-size:11px; opacity:.8; }
+  .hero { position:relative; border-radius:18px; padding:18px; margin-bottom:12px; overflow:hidden; color:#eaf2ff;
+          background:radial-gradient(1200px 420px at 70% -10%, #26356b 0%, #121a33 45%, var(--night) 100%);
+          border:1px solid #1b2547; box-shadow:0 18px 40px rgba(12,20,45,.28); min-height:190px; }
+  .hero::before { content:""; position:absolute; inset:0;
+          background-image:radial-gradient(1.2px 1.2px at 18% 32%,#fff,transparent),
+                           radial-gradient(1px 1px at 42% 66%,#cfe0ff,transparent),
+                           radial-gradient(1.4px 1.4px at 66% 26%,#fff,transparent),
+                           radial-gradient(1px 1px at 82% 58%,#bcd4ff,transparent),
+                           radial-gradient(1px 1px at 30% 82%,#e8f1ff,transparent);
+          opacity:.55; pointer-events:none; }
+  .hero h3 { margin:0 0 6px; font-size:14px; font-weight:600; letter-spacing:.4px; }
+  .hero p { margin:0; font-size:12px; color:#a9b8d8; }
+  .hero .node { position:absolute; left:50%; top:46%; transform:translate(-50%,-50%); text-align:center; font-size:12px; color:#dfe9ff; }
+  .hero .dot { width:14px; height:14px; border-radius:50%; background:#ffd7e6; box-shadow:0 0 22px 6px rgba(255,120,170,.55); margin:0 auto 8px; }
+  .hero .relay { position:absolute; left:50%; top:22%; transform:translateX(-50%); font-size:11px; color:#9fb2d8; }
+  .kv { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; }
+  .kv .item { border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:var(--soft); }
+  .kv .item .k { font-size:11px; color:var(--muted); }
+  .kv .item .v { font-size:15px; font-weight:600; margin-top:4px; word-break:break-all; }
+  .foot { color:var(--muted); font-size:11px; text-align:right; margin-top:6px; }
+  button.ghost { background:var(--card); border:1px solid var(--line); border-radius:11px; padding:7px 12px;
+                 font-size:12px; cursor:pointer; color:var(--text); }
+  button.ghost:hover { background:var(--soft); border-color:#bfe3fa; }
+</style>
+</head>
+<body>
+<header>
+  <h1>我能永远守护你</h1>
+  <span class="badge">守护每一只大肥鱼的人生</span>
+  <span id="pill" class="pill">连接中…</span>
+</header>
+
+<nav id="nav">
+  <button data-tab="finance" class="active">金融</button>
+  <button data-tab="social">社会</button>
+  <button data-tab="medical">医疗</button>
+  <button data-tab="status">状态</button>
+</nav>
+
+<main>
+  <!-- 金融 -->
+  <section class="panel active" id="tab-finance">
+    <div class="tiles">
+      <div class="tile"><div class="k">现金余额</div><div class="v">—</div><div class="s">账本未接入</div></div>
+      <div class="tile"><div class="k">总资产</div><div class="v">—</div><div class="s">房产 / 车辆</div></div>
+      <div class="tile"><div class="k">本月收支</div><div class="v">— / —</div><div class="s">工资 · 水电 · 房贷</div></div>
+      <div class="tile"><div class="k">流水笔数</div><div class="v">0</div><div class="s">每笔钱都有去处</div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>资产</h2><span class="tag">多套多辆 · 独立标识</span></div>
+      <div class="empty">还没有房产 / 车辆记录<br><span>v1 账本接入后在这里登记，支持多套多辆</span></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>最近流水</h2><span class="tag">余额 = 账本聚合</span></div>
+      <div class="empty">工资、水电物业、房贷车贷会按周期自动记账<br><span>同一周期只结算一次（幂等）</span></div>
+    </div>
+  </section>
+
+  <!-- 社会 -->
+  <section class="panel" id="tab-social">
+    <div class="hero">
+      <h3>关系图谱</h3>
+      <p>人物是节点，关系是有向边；状态与亲密度由事件流水聚合而来</p>
+      <div class="relay">family</div>
+      <div class="node"><div class="dot"></div>你</div>
+      <p style="position:absolute;left:18px;bottom:16px">关系引擎 v1 接入后，这里显示真实图谱</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="k">关系节点</div><div class="v">0</div><div class="s">人不是字符串</div></div>
+      <div class="tile"><div class="k">朋友 / 挚友</div><div class="v">0 / 0</div><div class="s">状态在边上</div></div>
+      <div class="tile"><div class="k">冷战</div><div class="v">0</div><div class="s">可和好，可决裂</div></div>
+      <div class="tile"><div class="k">人情债</div><div class="v">0</div><div class="s">正=我欠 TA</div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>最近关系动态</h2><span class="tag">约饭 · 送礼 · 吵架 · 和好</span></div>
+      <div class="empty">还没有关系事件<br><span>事件流水接上后，每次亲近和冲突都会留痕</span></div>
+    </div>
+  </section>
+
+  <!-- 医疗 -->
+  <section class="panel" id="tab-medical">
+    <div class="tiles">
+      <div class="tile"><div class="k">最近体检</div><div class="v">—</div><div class="s">暂无记录</div></div>
+      <div class="tile"><div class="k">就诊记录</div><div class="v">0</div><div class="s">规划中</div></div>
+      <div class="tile"><div class="k">在用药</div><div class="v">0</div><div class="s">规划中</div></div>
+      <div class="tile"><div class="k">健康状态</div><div class="v">—</div><div class="s">规划中</div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>健康档案</h2><span class="tag">医疗模块规划中</span></div>
+      <div class="empty">这里会放她的体检、就诊、用药和作息<br><span>先占位，等社会与财务模块稳定后再接</span></div>
+    </div>
+  </section>
+
+  <!-- 状态 -->
+  <section class="panel" id="tab-status">
+    <div class="card">
+      <div class="card-h"><h2>运行状态</h2><span class="tag" id="statusTag">实时</span>
+        <button class="ghost" id="refresh" style="margin-left:auto">刷新</button>
+      </div>
+      <div class="kv">
+        <div class="item"><div class="k">状态</div><div class="v" id="s-status">—</div></div>
+        <div class="item"><div class="k">版本</div><div class="v" id="s-version">—</div></div>
+        <div class="item"><div class="k">代际</div><div class="v" id="s-gen">—</div></div>
+        <div class="item"><div class="k">任务</div><div class="v" id="s-tasks">—</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>事件循环</h2><span class="tag">越低越稳</span></div>
+      <div class="kv">
+        <div class="item"><div class="k">lag p99</div><div class="v" id="s-p99">—</div></div>
+        <div class="item"><div class="k">lag max</div><div class="v" id="s-max">—</div></div>
+        <div class="item"><div class="k">超阈值次数</div><div class="v" id="s-hits">—</div></div>
+        <div class="item"><div class="k">采样数</div><div class="v" id="s-samples">—</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h2>数据库</h2><span class="tag">独立存储</span></div>
+      <div class="kv">
+        <div class="item"><div class="k">事件 / 人物</div><div class="v" id="s-events">—</div></div>
+        <div class="item"><div class="k">关系边 / 结算</div><div class="v" id="s-edges">—</div></div>
+        <div class="item"><div class="k">库大小</div><div class="v" id="s-dbmb">—</div></div>
+        <div class="item"><div class="k">磁盘余量</div><div class="v" id="s-free">—</div></div>
+      </div>
+      <div class="foot" id="s-updated">—</div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  var API = "/api/plug/Astrbot_amoupup_watch/diag";
+  var nav = document.getElementById("nav");
+  var panels = document.querySelectorAll(".panel");
+  nav.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-tab]");
+    if (!btn) return;
+    nav.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b === btn); });
+    panels.forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + btn.dataset.tab); });
+    if (btn.dataset.tab === "status") refresh();
+  });
+
+  function set(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
+  function pill(text, cls) { var p = document.getElementById("pill"); p.textContent = text; p.className = "pill " + (cls || ""); }
+
+  function unwrap(payload) {
+    if (!payload) return null;
+    if (payload.data && typeof payload.data === "object") return payload.data;
+    return payload;
+  }
+
+  function fetchDiag() {
+    return fetch(API, { credentials: "same-origin", headers: { "Accept": "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(unwrap);
+  }
+
+  function refresh() {
+    var view = window.AstrBotPluginView;
+    var load = (view && typeof view.apiGet === "function")
+      ? Promise.resolve().then(function () { return view.apiGet(API); }).then(unwrap).catch(fetchDiag)
+      : fetchDiag();
+    load
+      .then(function (data) {
+        if (!data || data.status === "error") throw new Error("bad payload");
+        pill(data.status === "ready" ? "运行中" : (data.status || "未知"), data.status === "ready" ? "ok" : "bad");
+        set("s-status", data.status || "—");
+        set("s-version", data.version || "—");
+        set("s-gen", data.generation || "—");
+        set("s-tasks", (data.tasks && data.tasks.count != null) ? data.tasks.count + " 个" : "—");
+        var lag = data.lag || {};
+        set("s-p99", (lag.p99 != null ? lag.p99 + " s" : "—"));
+        set("s-max", (lag.max != null ? lag.max + " s" : "—"));
+        set("s-hits", lag.hits != null ? lag.hits : "—");
+        set("s-samples", lag.samples != null ? lag.samples : "—");
+        var st = data.store || {};
+        set("s-events", (st.events != null ? st.events : "—") + " / " + (st.people != null ? st.people : "—"));
+        set("s-edges", (st.edges != null ? st.edges : "—") + " / " + (st.settlements != null ? st.settlements : "—"));
+        set("s-dbmb", st.db_mb != null ? st.db_mb + " MB" : "—");
+        set("s-free", st.free_mb != null ? st.free_mb + " MB" : "—");
+        set("s-updated", "更新于 " + new Date().toLocaleTimeString());
+      })
+      .catch(function (err) {
+        pill("后端未就绪", "bad");
+        set("s-updated", "拉取失败：" + err.message);
+      });
+  }
+
+  document.getElementById("refresh").addEventListener("click", refresh);
+  refresh();
+  setInterval(refresh, 15000);
+})();
+</script>
+</body>
+</html>
