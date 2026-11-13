@@ -1,0 +1,134 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "总开关（关闭后 amo 侧直接跳过，零开销）",
+    "default": true,
+    "hint": "关掉等于没装，但数据保留。"
+  },
+  "max_events_per_day": {
+    "type": "int",
+    "description": "每天最多新增多少条社会事件",
+    "default": 2000,
+    "hint": "超限丢弃权重最低的事件并记一条 [WATCH] cap=events。"
+  },
+  "event_retention_days": {
+    "type": "int",
+    "description": "事件保留天数",
+    "default": 90,
+    "hint": "超出先归档到 archive/ 再删除。"
+  },
+  "archive_keep_months": {
+    "type": "int",
+    "description": "归档保留月数",
+    "default": 12,
+    "hint": "到期删除归档文件，不影响主库。"
+  },
+  "db_soft_limit_mb": {
+    "type": "int",
+    "description": "主库软上限（MB）",
+    "default": 300,
+    "hint": "超限触发归档 + VACUUM；仍超则进入只读降级。"
+  },
+  "max_people": {
+    "type": "int",
+    "description": "社会关系节点上限",
+    "default": 300,
+    "hint": "达到上限后不再创建新 NPC，只保留高权重关系。"
+  },
+  "max_edges": {
+    "type": "int",
+    "description": "关系边总数上限",
+    "default": 5000,
+    "hint": "超限只保留权重最高的边。"
+  },
+  "edges_per_person": {
+    "type": "int",
+    "description": "单人关系边上限",
+    "default": 50,
+    "hint": "超限合并低权重边（保留方向与最近互动时间）。"
+  },
+  "graph_max_nodes": {
+    "type": "int",
+    "description": "全量重算允许的节点数",
+    "default": 300,
+    "hint": "节点更多时只做增量更新，全量推迟到凌晨 04:00 窗口。"
+  },
+  "poll_interval_seconds": {
+    "type": "int",
+    "description": "行情/资讯轮询间隔（秒）",
+    "default": 300,
+    "hint": "小于 120 会被自动抬到 120，防止外部接口被打爆。"
+  },
+  "poll_timeout_seconds": {
+    "type": "int",
+    "description": "外部请求超时（秒）",
+    "default": 10,
+    "hint": "超时记 stale 并进入退避。"
+  },
+  "breaker_threshold": {
+    "type": "int",
+    "description": "连续失败多少次触发熔断",
+    "default": 3,
+    "hint": "熔断期间只用缓存，15 分钟后半开重试。"
+  },
+  "npc_dialogue_per_hour": {
+    "type": "int",
+    "description": "NPC 生成对话次数/小时",
+    "default": 20,
+    "hint": "超限只发模板句，避免烧模型额度。"
+  },
+  "job_queue_max": {
+    "type": "int",
+    "description": "后台任务队列长度上限",
+    "default": 100,
+    "hint": "满了丢最旧并计数告警。"
+  },
+  "job_timeout_seconds": {
+    "type": "int",
+    "description": "单个后台任务超时（秒）",
+    "default": 60,
+    "hint": "超时取消并写 [WATCH] isolated scope=job.timeout。"
+  },
+  "io_threads": {
+    "type": "int",
+    "description": "自有 IO 线程池大小",
+    "default": 4,
+    "hint": "固定值，不随负载增长；不要改成 0。"
+  },
+  "log_max_mb": {
+    "type": "int",
+    "description": "单个日志文件上限（MB）",
+    "default": 10,
+    "hint": "超过轮转，最多保留 log_backups 个。"
+  },
+  "log_backups": {
+    "type": "int",
+    "description": "日志保留份数",
+    "default": 3,
+    "hint": "0 表示不轮转（不建议）。"
+  },
+  "inject_max_chars": {
+    "type": "int",
+    "description": "注入 amo 提示词的最大字数",
+    "default": 800,
+    "hint": "0 表示不注入；超出按权重截断。"
+  },
+  "inject_max_items": {
+    "type": "int",
+    "description": "注入 amo 提示词的最大事件条数",
+    "default": 5,
+    "hint": "和字数上限取先到者。"
+  },
+  "startup_grace_seconds": {
+    "type": "int",
+    "description": "启动宽限期（秒）",
+    "default": 20,
+    "hint": "宽限期内不向 amo 提供内容，等库和线程池就绪。"
+  },
+  "storage_min_free_mb": {
+    "type": "int",
+    "description": "磁盘余量红线（MB）",
+    "default": 500,
+    "hint": "低于红线立刻只读降级，宁可不写也不拖死 amo。"
+  }
+}

@@ -1,0 +1,2 @@
+# 本项目 v0.1 只依赖标准库 + AstrBot 运行时。
+# 需要第三方库时在这里加，并在 docs/ISOLATION-DESIGN.md 的「依赖隔离」一节登记。

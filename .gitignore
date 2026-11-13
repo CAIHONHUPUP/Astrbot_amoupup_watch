@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.db
+*.db-wal
+*.db-shm
+plugin_data/
+logs/
+archive/
+snapshots/
+.idea/
+.vscode/
