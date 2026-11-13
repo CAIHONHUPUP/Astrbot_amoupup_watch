@@ -324,17 +324,31 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
   function toast(msg) { var t = q("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(function () { t.classList.remove("show"); }, 2200); }
 
-  function apiGet(url) {
-    var view = window.AstrBotPluginView;
-    if (view && typeof view.apiGet === "function") {
-      return view.apiGet(url).then(function (r) { return (r && r.data) ? r.data : r; }).catch(function () { return rawGet(url); });
+  function unwrapView(v) {
+    if (v && typeof v === "object" && typeof v.json === "function") {
+      return v.json().then(unwrapView);
     }
-    return rawGet(url);
+    if (typeof v === "string") {
+      try { return unwrapView(JSON.parse(v)); } catch (e) { return v; }
+    }
+    if (v && typeof v === "object" && v.code !== undefined && v.data !== undefined) {
+      return unwrapView(v.data);
+    }
+    return v;
+  }
+  function apiGet(url) {
+    return rawGet(url).catch(function () {
+      var view = window.AstrBotPluginView;
+      if (view && typeof view.apiGet === "function") {
+        return view.apiGet(url).then(unwrapView);
+      }
+      throw new Error("no bridge");
+    });
   }
   function rawGet(url) {
-    return fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json" } })
+    return fetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json" } })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (d) { return (d && d.data) ? d.data : d; });
+      .then(unwrapView);
   }
 
   // ---------- tabs ----------
