@@ -124,13 +124,13 @@ class FinanceLink:
         """对话前检索持仓/盈亏记忆，供注入 LLM 上下文。"""
         return await self.memory.context(limit=limit)
 
-    async def _tier(self, tier, content, idem, related=""):
+    async def _tier(self, tier, content, idem, related="", tag=""):
         tm = getattr(self.plugin, "finance_memory", None)
         if tm is None:
             return (await self.memory.remember(content, kind="finance", idem=idem)).get("ok")
         if tier == "short" and related:
-            return await tm.overwrite_short(related, content, idem)
-        return await tm.remember(tier, content, idem, related=related)
+            return await tm.overwrite_short(related, content, idem, tag=tag or "pnl")
+        return await tm.remember(tier, content, idem, related=related, tag=tag)
 
     def credit_initial(self, cents):
         """首次启动写入初始存款（只调 amo 钱包，不碰余额字段）。"""
@@ -261,7 +261,7 @@ class FinanceLink:
         else:
             text = "%s 收到%s %s，入账后可用余额 %s，%s。" % (
                 when, reason or "一笔钱", yuan(amount_cents), self._balance_text(amo), after)
-        steps["memory"] = await self._tier("permanent" if salary else "long", text, idem + ":mem")
+        steps["memory"] = await self._tier("permanent" if salary else "long", text, idem + ":mem", tag="income")
         if int(amount_cents) >= 500000:
             steps["long_diary"] = self._long_diary(
                 amo, "今天%s，一共 %s。我从%s变成%s，心里踏实了不少。" % (
@@ -292,7 +292,7 @@ class FinanceLink:
         when = time.strftime("%Y-%m-%d %H:%M")
         text = "%s %s 花了 %s，扣款后余额 %s，%s。" % (
             when, reason or "一笔开销", yuan(amount_cents), self._balance_text(amo), after)
-        steps["memory"] = await self._tier("long", text, idem + ":mem")
+        steps["memory"] = await self._tier("long", text, idem + ":mem", tag="expense")
         return {"ok": True, "mood": after, "steps": steps}
 
     async def trade_pnl(self, pnl_cents, ratio, symbol, idem):
@@ -314,7 +314,7 @@ class FinanceLink:
         text = "%s %s %s %s（%+.2f%%），%s。" % (
             when, symbol or "交易", "实现盈利" if pnl_cents >= 0 else "实现亏损",
             yuan(abs(int(pnl_cents))), float(ratio) * 100, after)
-        steps["memory"] = await self._tier("short", text, idem + ":mem", related=str(symbol or ""))
+        steps["memory"] = await self._tier("short", text, idem + ":mem", related=str(symbol or ""), tag="pnl")
         if abs(int(pnl_cents)) >= 100000:
             steps["long_diary"] = self._long_diary(
                 amo, "今天 %s %s %s，从%s变成%s。" % (
@@ -377,7 +377,7 @@ class FinanceLink:
                 when, label, name, code, qty, unit, price, yuan(amount_cents), yuan(fee_cents),
                 ("+" if pnl_cents >= 0 else "-") + yuan(abs(int(pnl_cents))), float(pnl_pct) * 100,
                 holding_qty, unit, word)
-        ok = await self._tier("long", text, idem + ":mem")
+        ok = await self._tier("long", text, idem + ":mem", tag="trade")
         return {"ok": bool(ok), "verified": bool(ok)}
 
     async def record_daily_pnl(self, items, total_pnl_cents, idem=""):

@@ -42,16 +42,17 @@ class TieredMemory:
              now + (ttl_days * 86400 if ttl_days else 0)),
         )
 
-    async def remember(self, tier, content, idem, related=""):
+    async def remember(self, tier, content, idem, related="", tag=""):
         if tier not in TIERS:
             tier = "long"
         text = str(content or "").strip()
         if not text or self._exists(idem):
             return False
         ttl = TTL_DAYS[tier]
+        kind = "finance_" + tier + (("_" + str(tag)) if tag else "")
         self._index(idem, tier, text, related, ttl)
         try:
-            ok = await self.memory.remember(text, kind="finance_" + tier, idem=idem)
+            ok = await self.memory.remember(text, kind=kind, idem=idem)
         except Exception as exc:
             isolated("finance.tier.write", exc)
             ok = False
@@ -59,14 +60,14 @@ class TieredMemory:
             self.repo.store.write("DELETE FROM memory_index WHERE idem=?", (str(idem),))
         return bool(ok)
 
-    async def overwrite_short(self, related, content, idem):
+    async def overwrite_short(self, related, content, idem, tag="pnl"):
         """短期层覆盖式：同一持仓只留最新一条。"""
         rows = self.repo._rows(
             "SELECT idem FROM memory_index WHERE tier='short' AND related=? AND status='active'",
             (str(related),))
         for row in rows:
             self.repo.store.write("UPDATE memory_index SET status='archived' WHERE idem=?", (row["idem"],))
-        return await self.remember("short", content, idem, related=related)
+        return await self.remember("short", content, idem, related=related, tag=tag)
 
     # ---------- 读 ----------
     def retrieve(self, related_codes=None, limit=MAX_ITEMS):

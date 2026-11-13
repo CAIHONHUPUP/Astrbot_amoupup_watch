@@ -39,7 +39,7 @@ class FinanceConsume:
         if price is None:
             return {"ok": False, "message": "不认识这个商品：%s" % name}
         amount = price * qty
-        idem = str(idem or ("consume:%s:%s:%d" % (name, when or "", qty)))
+        idem = str(idem or ("consume:%s:%s:%d" % (name, when or __import__("time").strftime("%Y%m%d%H%M"), qty)))
         result = await self.finance.expense(amount, "%s × %d" % (name, qty), idem, necessary=False)
         if not result.get("ok"):
             return {"ok": False, "message": result.get("reason") or "余额不足"}
@@ -54,8 +54,9 @@ class FinanceConsume:
     async def buy_items(self, items, idem="", when=""):
         """一次买多样：逐项扣款、逐项记录，不合并成一条。"""
         results = []
+        base = idem or ("basket:%s" % __import__("time").strftime("%Y%m%d%H%M%S"))
         for index, entry in enumerate(items or []):
             name = entry.get("item")
             qty = entry.get("qty", 1)
-            results.append(await self.buy_item(name, qty, idem="%s:%d" % (idem or "basket", index), when=when))
+            results.append(await self.buy_item(name, qty, idem="%s:%d" % (base, index), when=when))
         return results
