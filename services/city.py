@@ -91,6 +91,8 @@ async def move_to(plugin, name):
             if config is not None:
                 config["weather_city"] = str(hit["id"])
                 config["weather_city_name"] = str(hit.get("name") or name)
+                # 日程城市一起改：amo 的 city_or_empty 优先读 schedule_city
+                config["schedule_city"] = str(hit.get("name") or name)
                 saver = getattr(config, "save_config", None)
                 if callable(saver):
                     saver()

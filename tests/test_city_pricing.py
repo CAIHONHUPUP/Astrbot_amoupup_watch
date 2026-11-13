@@ -129,6 +129,7 @@ def test_move_updates_weather_worldview_and_priority():
     assert result["ok"] and result["world"] is True
     assert result["weather"]["id"] == "101281601"
     assert amo.config["weather_city_name"] == "东莞" and amo.config.saved == 1
+    assert amo.config["schedule_city"] == "东莞"      # amo 日程城市跟着搬家
     assert _WEATHER_CALLS == [True]          # 搬完立刻刷新天气
     assert amo.kv["worldview"]["city"] == "东莞"
     # 搬家后本插件以新城市为准

@@ -98,7 +98,7 @@ except ImportError:  # 直接按文件加载时
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.2.1"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag", "finance"]
 

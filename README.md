@@ -3,7 +3,7 @@
 > **我能永远守护你**（独立社会模拟插件，AstrBot v4）。她有自己的社交世界：谁找她、她跟谁熟、哪些事会传开。
 > **与 amo（Astrbot_amoupup_forever）只做握手接入，不进入 amo 代码库。**
 
-- 当前版本：**0.2.0（金融/生活/职场全链路）**：guard / runtime / store / scheduler + 15 项单测；业务逻辑（world.py）还没写
+- 当前版本：**0.2.1（金融/生活/职场全链路 + 搬家同步日程城市）**：guard / runtime / store / scheduler + 15 项单测；业务逻辑（world.py）还没写
 - 跑测试：`pytest tests -q`（插件根目录放 PYTHONPATH）
 - 设计文档：[docs/ISOLATION-DESIGN.md](docs/ISOLATION-DESIGN.md)
 - 握手契约：[docs/HANDSHAKE.md](docs/HANDSHAKE.md)
