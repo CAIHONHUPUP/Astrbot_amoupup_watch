@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS assets (
     kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
     value_cents INTEGER NOT NULL DEFAULT 0, ts REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS loan_installments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    loan_id INTEGER NOT NULL, seq INTEGER NOT NULL,
+    due_day TEXT NOT NULL, principal_cents INTEGER NOT NULL DEFAULT 0,
+    interest_cents INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'pending',
+    paid_at REAL NOT NULL DEFAULT 0,
+    UNIQUE(loan_id, seq)
+);
 CREATE TABLE IF NOT EXISTS market_cache (
     day TEXT NOT NULL, code TEXT NOT NULL, price_cents INTEGER NOT NULL DEFAULT 0,
     prev_cents INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT '',
@@ -145,6 +153,10 @@ class Store:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
+        try:  # 老库补列：贷款状态
+            conn.execute("ALTER TABLE loans ADD COLUMN status TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
             conn.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)

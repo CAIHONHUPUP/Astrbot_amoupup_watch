@@ -204,3 +204,20 @@
 | 对话前检索 | `finance_recall` | `finance_link.py::memory_context` → `finance_memory.py::MemoryLink.context` |
 | 写入回读校验 | `finance_recall` | `finance_memory.py::MemoryLink.remember(verify=True)` |
 | 面板数据 | `WatchPlugin._finance_provider` → `finance.snapshot()` | `watch/main.py::_finance_snapshot` |
+
+---
+
+## 12. 自主交易 / 三次行情 / 资金紧张 / 单品消费（2026-11-13 落地）
+
+| 联动点 | 接口 | 调用位置 |
+|---|---|---|
+| 自主买入决策 | `Trading.buy(...)`（自身调用，用户推荐只进上下文） | `finance_decision.py::decide / _execute` |
+| 自主卖出决策 | `Trading.sell(...)` | `finance_decision.py::_execute` |
+| 决策理由记忆 | `finance.memory.remember(kind="finance_decision")` + `AmoDB.save_diary` | `finance_decision.py::_record` |
+| 9:30 行情查询 | `fetch_quotes` + `repo.upsert_position` | `finance_decision.py::_refresh` |
+| 午间行情查询 | 同上（11:35，只复盘） | `run_slot(slot="noon")` |
+| 14:50 行情查询 | 同上（最终窗口） | `run_slot(slot="close")` |
+| 15:00 盈亏结算 | `record_daily_pnl` | `finance_decision.py::close_day` |
+| 低于 5% 银行借款 | `FinanceLink.borrow` + loans/installments | `finance_help.py::take_loan` |
+| 低于 5% 用户求助 | `FinanceLink.income(用户转账)` | `finance_help.py::user_transfer` + `on_transfer` |
+| 单品级消费 | `FinanceLink.expense`（逐项） | `finance_consume.py::buy_item` |

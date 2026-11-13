@@ -198,7 +198,7 @@
 
     <div class="card">
       <div class="card-h"><h2>行情</h2><span class="tag" id="marketTag">今日 0/2</span><span class="tag" id="marketSrc">腾讯 qt.gtimg.cn</span></div>
-      <div class="mood-line" id="marketLine">9:30 开盘记买入价，15:00 收盘更新盈亏；只查实际持仓</div>
+      <div class="mood-line" id="marketLine">每天三次：9:30 早盘 / 11:30 午间 / 14:50 收盘前；只查实际持仓</div>
     </div>
 
     <div class="card">
@@ -420,7 +420,7 @@
   function renderMarket(m) {
     q("marketTag").textContent = "今日 " + (m.checks || 0) + "/" + (m.limit || 2);
     q("marketSrc").textContent = m.source || "腾讯 qt.gtimg.cn";
-    q("marketLine").textContent = m.last || "9:30 开盘记买入价，15:00 收盘更新盈亏；只查实际持仓";
+    q("marketLine").textContent = m.last || "每天三次：9:30 早盘 / 11:30 午间 / 14:50 收盘前；只查实际持仓";
   }
 
   function renderBank(b) {
