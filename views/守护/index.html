@@ -492,7 +492,13 @@
     var b = q("brief");
     b.textContent = briefText();
     b.classList.add("show");
+    q("briefBtn").textContent = "收起简报";
     b.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function hideBrief() {
+    q("brief").classList.remove("show");
+    q("briefBtn").textContent = "持仓简报";
   }
 
   function loadFinance() {
@@ -519,7 +525,13 @@
     q("posSeg").querySelectorAll("button").forEach(function (x) { x.classList.toggle("active", x === b); });
     renderPositions();
   });
-  q("briefBtn").addEventListener("click", showBrief);
+  q("briefBtn").addEventListener("click", function () {
+    var b = q("brief");
+    if (b.classList.contains("show")) { hideBrief(); return; }
+    var card = b.closest(".card");
+    if (card) card.classList.add("open");   // 折叠状态下先展开，否则看不到简报
+    showBrief();
+  });
   q("posTable").addEventListener("click", function (e) {
     var b = e.target.closest("button[data-sell]");
     if (!b) return;
@@ -539,7 +551,11 @@
   }
   function closeSheet(withBrief) {
     q("sheetMask").classList.remove("open");
-    if (withBrief) showBrief();
+    if (withBrief) {
+      var card = q("brief").closest(".card");
+      if (card) card.classList.add("open");
+      showBrief();
+    }
   }
   function updateForm() {
     var act = sheet.act;
