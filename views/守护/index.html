@@ -345,8 +345,19 @@
       throw new Error("no bridge");
     });
   }
+  function authHeaders() {
+    var h = { "Accept": "application/json" };
+    try {
+      var keys = ["token", "astrbot_token", "access_token", "dashboard_token"];
+      for (var i = 0; i < keys.length; i++) {
+        var v = window.localStorage.getItem(keys[i]);
+        if (v) { h["Authorization"] = "Bearer " + v; break; }
+      }
+    } catch (e) {}
+    return h;
+  }
   function rawGet(url) {
-    return fetch(url, { credentials: "same-origin", cache: "no-store", headers: { "Accept": "application/json" } })
+    return fetch(url, { credentials: "same-origin", cache: "no-store", headers: authHeaders() })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(unwrapView);
   }
