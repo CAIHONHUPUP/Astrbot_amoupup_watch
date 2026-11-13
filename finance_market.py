@@ -33,6 +33,10 @@ def parse_quotes(text: str) -> dict:
                 "name": fields[1].strip(),
                 "price": float(fields[3]),
                 "prev_close": float(fields[4]),
+                "open": float(fields[5] or 0),
+                "high": float(fields[33] or 0) if len(fields) > 33 else 0.0,
+                "low": float(fields[34] or 0) if len(fields) > 34 else 0.0,
+                "volume": float(fields[6] or 0) if len(fields) > 6 else 0.0,
             }
         except (TypeError, ValueError):
             continue

@@ -221,3 +221,26 @@
 | 低于 5% 银行借款 | `FinanceLink.borrow` + loans/installments | `finance_help.py::take_loan` |
 | 低于 5% 用户求助 | `FinanceLink.income(用户转账)` | `finance_help.py::user_transfer` + `on_transfer` |
 | 单品级消费 | `FinanceLink.expense`（逐项） | `finance_consume.py::buy_item` |
+
+---
+
+## 13. 交易细则 / 三餐 / 水电分项（2026-11-13 落地）
+
+| 规则 | 落点 |
+|---|---|
+| 一字涨停不可买、跌停不可卖、停牌不成交 | `finance_trading.py::_one_word / _suspended`（Trading.buy/sell 前置校验） |
+| 行情失败不成交、不更新盈亏 | `finance_trading.py`「看不到行情，今天不交易」；`finance_decision.py::_refresh` 仅成功报价才更新现价 |
+| 股票 T+1 / 基金 T+2 可用 | `positions.ready_day` + `Trading.refresh_available` |
+| 加权平均成本、卖出按成本结转 | `Trading.buy/sell`（成本=加权，卖出按均价结转实现盈亏） |
+| 分红/送转除权 | `Trading.apply_dividend(code, cash_per_share_cents, bonus_ratio)` |
+| 退市强制平仓 | `Trading.force_close(code, reason, price)` |
+| 三餐单品逐笔（7:30–9:00 / 11:30–13:00 / 17:30–19:30） | `finance_daily.py::tick`（meta 幂等，逐项 `buy_item`） |
+| 水/电/燃气/宽带分项 + 夏季电价 + 欠费预警 | `finance_life.py::_utilities`（顺序 房租→水→电→燃气→宽带） |
+
+### 仍待实现（已记录，不假装完成）
+
+1. 可用余额 / 可取余额分账（卖出当日可买、T+1 可取；基金赎回 T+7 到账）。
+2. 候选池：表与 `add_candidate` 已就绪，决策行情尚未只查「持仓+候选」；用户推荐入库的入口未接。
+3. 调薪公式（资产变化 + 收支比）、看病/人情概率事件、旅游区间。
+4. 股息红利税说明、初始状态配置（初始存款/房车/持仓/闲置现金计息）。
+5. 指令清单与模拟时钟测试清单（工资→买入→T+1→涨停→亏损→5% 二选一→还款→日记）。

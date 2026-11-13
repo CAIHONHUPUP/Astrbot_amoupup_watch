@@ -141,6 +141,10 @@ class FinanceHelp:
         result = await self.finance.income(int(amount_cents), "用户转账", idem, salary=False)
         if not result.get("ok"):
             return {"ok": False, "message": "转账入账失败"}
+        try:
+            self.finance.mark_withdrawable(int(amount_cents), idem + ":w")
+        except Exception:
+            pass
         if self._episode_open():
             self._close_episode("user")
         return {"ok": True, "message": "收到转账 %.2f 元" % (int(amount_cents) / 100.0)}

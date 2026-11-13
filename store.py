@@ -78,6 +78,16 @@ CREATE TABLE IF NOT EXISTS assets (
     kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
     value_cents INTEGER NOT NULL DEFAULT 0, ts REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS pending_credits (
+    idem TEXT PRIMARY KEY, kind TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL DEFAULT 0, due_day TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending', created REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS candidates (
+    code TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '', expires_at REAL NOT NULL DEFAULT 0,
+    created REAL NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS loan_installments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     loan_id INTEGER NOT NULL, seq INTEGER NOT NULL,
@@ -153,10 +163,14 @@ class Store:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.executescript(SCHEMA)
-        try:  # 老库补列：贷款状态
-            conn.execute("ALTER TABLE loans ADD COLUMN status TEXT NOT NULL DEFAULT ''")
-        except sqlite3.OperationalError:
-            pass
+        for ddl in (
+            "ALTER TABLE loans ADD COLUMN status TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE positions ADD COLUMN ready_day TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
             conn.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)

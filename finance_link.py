@@ -67,6 +67,40 @@ class FinanceLink:
             isolated("finance.balance", exc)
             return None
 
+    def withdrawable_cents(self):
+        amo = self._amo()
+        if amo is None:
+            return None
+        try:
+            return int(amo.wallet.balance("withdrawable"))
+        except Exception as exc:
+            isolated("finance.withdrawable", exc)
+            return None
+
+    def transfer_in(self, amount_cents, idem):
+        """用户转账：可用和可取同时增加（银行入账，不是卖出）。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            if not amo.wallet.credit(int(amount_cents), "用户转账", idem):
+                return False
+            amo.wallet.credit(int(amount_cents), "用户转账-可取", idem + ":w", account="withdrawable")
+            return True
+        except Exception as exc:
+            isolated("finance.transfer_in", exc)
+            return False
+
+    def mark_withdrawable(self, amount_cents, idem):
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            return bool(amo.wallet.credit(int(amount_cents), "转账可取", idem, account="withdrawable"))
+        except Exception as exc:
+            isolated("finance.mark_withdrawable", exc)
+            return False
+
     def mood(self):
         """每次现读，不缓存（amo 是情绪权威）。"""
         amo = self._amo()
@@ -89,6 +123,48 @@ class FinanceLink:
     async def memory_context(self, limit=5):
         """对话前检索持仓/盈亏记忆，供注入 LLM 上下文。"""
         return await self.memory.context(limit=limit)
+
+    def credit_initial(self, cents):
+        """首次启动写入初始存款（只调 amo 钱包，不碰余额字段）。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            ok = bool(amo.wallet.credit(int(cents), "初始存款", "seed:initial"))
+            if ok:
+                amo.wallet.credit(int(cents), "初始存款-可取", "seed:initial:w", account="withdrawable")
+            return ok
+        except Exception as exc:
+            isolated("finance.seed", exc)
+            return False
+
+    def backfill_withdrawable(self):
+        """老库一次性补齐：已有的现金默认可取（只补一次）。"""
+        amo = self._amo()
+        repo = getattr(self.plugin, "finance_repo", None)
+        if amo is None or repo is None:
+            return False
+        if repo.meta_get("withdrawable_backfilled") == "1":
+            return False
+        cash = int(amo.wallet.balance("cash") or 0)
+        wd = int(amo.wallet.balance("withdrawable") or 0)
+        if cash > wd:
+            try:
+                amo.wallet.credit(cash - wd, "可取余额初始化", "seed:withdrawable", account="withdrawable")
+            except Exception as exc:
+                isolated("finance.withdrawable_backfill", exc)
+        repo.meta_set("withdrawable_backfilled", "1")
+        return True
+
+    def _count(self, key, cents):
+        try:
+            repo = getattr(self.plugin, "finance_repo", None)
+            if repo is None:
+                return
+            now = int(repo.meta_get(key, 0) or 0)
+            repo.meta_set(key, now + int(cents))
+        except Exception:
+            pass
 
     # ---------- 写：内部小工具（每步单独兜底） ----------
     def _nudge(self, amo, idem, deltas):
@@ -163,6 +239,8 @@ class FinanceLink:
         except Exception as exc:
             isolated("finance.income.wallet", exc)
             steps["wallet"] = False
+        if steps.get("wallet"):
+            self._count("half_income_cents", int(amount_cents))
         level = income_level(int(amount_cents), salary=salary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"])
         after = self.mood()["word"]
@@ -195,6 +273,7 @@ class FinanceLink:
             steps["wallet"] = False
         if not steps["wallet"]:
             return {"ok": False, "reason": "余额不足", "mood": before, "steps": steps}
+        self._count("half_expense_cents", int(amount_cents))
         level = expense_level(int(amount_cents), necessary=necessary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"]) if level["deltas"] else True
         after = self.mood()["word"]
@@ -234,6 +313,31 @@ class FinanceLink:
                     symbol or "这只票", "赚了" if pnl_cents >= 0 else "亏了",
                     yuan(abs(int(pnl_cents))), before, after))
         return {"ok": True, "mood": after, "steps": steps}
+
+    async def borrow(self, amount_cents, reason, idem, months=12):
+        """银行借款入账：钱进钱包，情绪「有点不好意思」，留记忆/日程/日记。"""
+        amo = self._amo()
+        if amo is None:
+            return {"ok": False, "reason": "amo 未就绪", "steps": {}}
+        steps = {}
+        before = self.mood()["word"]
+        try:
+            steps["wallet"] = bool(amo.wallet.credit(int(amount_cents), reason, idem))
+        except Exception as exc:
+            isolated("finance.borrow.wallet", exc)
+            steps["wallet"] = False
+        steps["mood"] = self._nudge(amo, idem, {"委屈": 2, "焦虑": 3})
+        after = self.mood()["word"]
+        steps["schedule"] = self._schedule(amo, "银行借款", amount_cents, before, after, "分 %d 个月还" % months)
+        steps["diary"] = self._small_diary(amo, "向银行借了 %s 周转，%s。" % (yuan(amount_cents), after))
+        text = "%s 向银行借了 %s 周转，分 %d 个月还，%s。" % (
+            time.strftime("%Y-%m-%d %H:%M"), yuan(amount_cents), months, after)
+        steps["memory"] = (await self.memory.remember(text, kind="finance", idem=idem + ":mem")).get("ok")
+        return {"ok": bool(steps.get("wallet")), "mood": after, "steps": steps}
+
+    async def remember_event(self, kind, amount_cents, text, idem):
+        """通用事件记忆（求助、资金紧张等）。"""
+        return await self.memory.remember(str(text), kind="finance", idem=str(idem) + ":mem")
 
     async def low_balance(self, need_cents, idem):
         amo = self._amo()

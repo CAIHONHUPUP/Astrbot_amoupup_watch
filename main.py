@@ -9,6 +9,7 @@ v0.1 边界层：guard / runtime / store / scheduler 四层就位，业务逻辑
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -30,7 +31,9 @@ except Exception:  # 离线单测 / 直接按文件导入
             self.context = context
 
 try:  # 包模式
+    from .finance_candidates import CandidatePools
     from .finance_consume import FinanceConsume
+    from .finance_daily import FinanceDaily
     from .finance_decision import FinanceDecision
     from .finance_help import FinanceHelp
     from .finance_life import FinanceLife
@@ -42,7 +45,9 @@ try:  # 包模式
     from .scheduler import Scheduler
     from .store import Store
 except ImportError:  # 直接按文件加载时
+    from finance_candidates import CandidatePools
     from finance_consume import FinanceConsume
+    from finance_daily import FinanceDaily
     from finance_decision import FinanceDecision
     from finance_help import FinanceHelp
     from finance_life import FinanceLife
@@ -76,6 +81,8 @@ class WatchPlugin(Star):
         self.finance_help = None
         self.finance_consume = None
         self.finance_decision = None
+        self.finance_daily = None
+        self.finance_pools = None
         self._closed = asyncio.Event()
         self._started_at = 0.0
         self._degraded = ""
@@ -103,8 +110,15 @@ class WatchPlugin(Star):
             self.finance_life = FinanceLife(self, self.finance_repo, self.finance)
             self.finance_help = FinanceHelp(self, self.finance_repo, self.finance)
             self.finance_consume = FinanceConsume(self, self.finance_repo, self.finance)
+            self.finance_daily = FinanceDaily(self, self.finance_repo, self.finance, self.finance_consume)
+            try:
+                self.finance.backfill_withdrawable()
+            except Exception as exc:
+                isolated("finance.withdrawable_boot", exc)
+            self.finance_pools = CandidatePools(self, self.finance_repo)
             self.finance_decision = FinanceDecision(
-                self, self.runtime, self.finance_repo, self.finance, self.trading, self.finance_help)
+                self, self.runtime, self.finance_repo, self.finance, self.trading,
+                self.finance_help, self.finance_pools)
             try:
                 await self.runtime.run_db(self.trading.refresh_available, timeout=5)
             except Exception as exc:
@@ -118,15 +132,45 @@ class WatchPlugin(Star):
         logger.info("[WATCH] loaded %s (%s) api=%s generation=%s",
                     PLUGIN_VERSION, DISPLAY_NAME, API_VERSION, self.runtime.generation)
 
+    async def _process_pending(self):
+        """到期的待入账：卖出资金 T+1 转可取，基金赎回 T+7 到账。"""
+        repo = self.finance_repo
+        amo = self.finance._amo()
+        if repo is None or amo is None:
+            return
+        today = time.strftime("%Y-%m-%d")
+        try:
+            rows = await self.runtime.run_db(repo.due_pending, today, timeout=5)
+        except Exception as exc:
+            isolated("finance.pending.query", exc)
+            return
+        for row in rows or []:
+            try:
+                amount = int(row.get("amount_cents") or 0)
+                kind = str(row.get("kind") or "")
+                idem = str(row.get("idem") or "")
+                if kind == "withdrawable":
+                    amo.wallet.credit(amount, "卖出资金可取", idem + ":w", account="withdrawable")
+                elif kind == "cash_withdrawable":
+                    amo.wallet.credit(amount, "基金赎回到账", idem)
+                    amo.wallet.credit(amount, "基金赎回可取", idem + ":w", account="withdrawable")
+                repo.finish_pending(idem)
+            except Exception as exc:
+                isolated("finance.pending.apply", exc)
+
     async def _finance_tick(self):
         """每 30 分钟检查一次：工资 / 房租 / 水电是否到了该结算的日期。"""
         try:
+            self.finance.backfill_withdrawable()
             await self.finance_life.tick()
+            await self._process_pending()
             if self.finance_help is not None:
                 self.finance_help.maybe_reset()
                 await self.finance_help.repay_tick()
             if self.finance_decision is not None:
                 await self.finance_decision.tick()
+            if self.finance_daily is not None:
+                await self.finance_daily.tick()
         except Exception as exc:
             isolated("finance.settle", exc)
 
@@ -217,6 +261,7 @@ class WatchPlugin(Star):
             register("/Astrbot_amoupup_watch/finance/loan", self._api_loan, ["POST"], "守护面板：借款")
             register("/Astrbot_amoupup_watch/finance/consume", self._api_consume, ["POST"], "守护面板：消费")
             register("/Astrbot_amoupup_watch/finance/decision", self._api_decision, ["POST"], "守护面板：决策")
+            register("/Astrbot_amoupup_watch/finance/debug", self._api_debug, ["POST"], "守护面板：调试触发")
             register("/Astrbot_amoupup_watch/trade", self._api_trade, ["POST"], "守护面板：下单")
             logger.info("[WATCH] web api /api/plug/Astrbot_amoupup_watch/diag 已注册")
         except Exception as exc:
@@ -289,9 +334,24 @@ class WatchPlugin(Star):
         monthly = sum(int(x.get("monthly_cents") or 0) for x in loans)
         rate = max([float(x.get("rate") or 0) for x in loans] or [0.0])
         mood = self.finance.mood()
+        decision = {}
+        try:
+            if self.finance_repo is not None:
+                raw = self.finance_repo.meta_get("last_decision")
+                decision = json.loads(raw) if raw else {}
+        except Exception:
+            decision = {}
+        help_state = {}
+        try:
+            if self.finance_help is not None:
+                help_state = self.finance_help.status()
+                help_state["prompt"] = self.finance_help.prompt_text()
+        except Exception:
+            help_state = {}
         return {
             "mode": "real",
             "wallet": {"total": (cash + market_value) / 100.0, "available": cash / 100.0,
+                       "withdrawable": (self.finance.withdrawable_cents() or 0) / 100.0,
                        "market_value": market_value / 100.0,
                        "today_pnl": total_pnl / 100.0,
                        "today_pct": (total_pnl / max(1, market_value - total_pnl) * 100.0)},
@@ -304,6 +364,8 @@ class WatchPlugin(Star):
             "market": {"checks": 0, "limit": 3, "last": "每天三次：9:30 / 11:30 / 14:50", "source": "腾讯 qt.gtimg.cn"},
             "bank": {"debt": debt / 100.0, "monthly": monthly / 100.0, "rate": rate,
                      "limit": 0, "items": loans, "note": ""},
+            "decision": decision,
+            "help": help_state,
             "plan": {"deposit": cash / 100.0, "invest_cap": 50,
                      "house": {"price": 0, "down_pct": 30, "years": [10, 20, 30], "monthly": 0},
                      "car": {"price": 0, "years": 5},
@@ -469,6 +531,22 @@ class WatchPlugin(Star):
             isolated("web.decision", exc)
             return {"ok": False, "message": "决策失败：%s" % exc}
 
+    async def _api_debug(self, request=None):
+        try:
+            body = await self._read_json()
+            action = str(body.get("action") or "").lower()
+            if action == "salary" and self.finance is not None:
+                return await self.finance.income(680000, "工资(调试)", "debug:salary:%d" % int(time.time()), salary=True)
+            if action == "rent" and self.finance is not None:
+                return await self.finance.expense(120000, "房租(调试)", "debug:rent:%d" % int(time.time()), necessary=True)
+            if action == "quotes" and self.finance_decision is not None:
+                result = await self.finance_decision.run_slot("close")
+                return {"ok": True, "result": result}
+            return {"ok": False, "message": "未知调试动作"}
+        except Exception as exc:
+            isolated("web.debug", exc)
+            return {"ok": False, "message": str(exc)}
+
     async def _api_diag(self, request=None):
         try:
             return await self.diag()
@@ -538,6 +616,19 @@ class WatchPlugin(Star):
             return "busy %.1fs mode=%s lag=%s" % (seconds, mode, self.runtime.lag_stats())
         return "未知测试：raise | busy <秒> [good|bad]"
 
+    async def money_cmd(self, event: AstrMessageEvent):
+        """理财菜单：/理财、/理财 总资产|持仓|贷款|日程|关闭"""
+        try:
+            text = str(getattr(event, "message_str", "") or "")
+            parts = [p for p in text.split() if p]
+            if parts and parts[0].lstrip("/").lower() in ("理财", "money"):
+                parts = parts[1:]
+            reply = self._format_money(parts[0] if parts else "")
+        except Exception as exc:
+            isolated("handler.money", exc)
+            reply = "理财信息暂时读不到。"
+        yield event.plain_result(reply)
+
     async def watch_cmd(self, event: AstrMessageEvent):
         """看社会插件状态：/watch、/watch diag、/watch test raise|busy"""
         try:
@@ -546,6 +637,107 @@ class WatchPlugin(Star):
             isolated("handler.watch", exc)
             text = "[WATCH] 命令出错已被隔离，amo 不受影响（trace_id=%s）" % _tid()
         yield event.plain_result(text)
+
+    async def finance_tool(self, event, action: str = "status"):
+        '''金融管家：查看她的资产、持仓、最近决策；也可以让她现在做一次决策。
+
+        Args:
+            action(string): status（资产+情绪）/ positions（持仓）/ decide（让她自己决定买或卖）
+        '''
+        try:
+            act = str(action or "status").lower()
+            if act == "positions":
+                rows = self.finance_repo.positions() if self.finance_repo else []
+                if not rows:
+                    return "她现在空仓。"
+                return "\n".join("%s(%s) %s 股，现价 %.2f，浮动 %+.2f%%" % (
+                    r.get("name") or r.get("code"), r.get("code"), r.get("qty"),
+                    int(r.get("last_cents") or 0) / 100.0,
+                    ((int(r.get("last_cents") or 0) - int(r.get("cost_cents") or 0))
+                     / max(1, int(r.get("cost_cents") or 0)) * 100.0)) for r in rows)
+            if act == "decide":
+                if self.finance_decision is None:
+                    return "决策模块未就绪。"
+                result = await self.finance_decision.run_slot("close")
+                d = (result or {}).get("decision") or {}
+                return "她决定：%s（%s）" % (d.get("reason") or "先不动", d.get("action") or "hold")
+            mood = self.finance.mood()
+            cents = self.finance.balance_cents() or 0
+            return "她现在%s，可用余额 ¥%.2f。" % (mood.get("word") or "平静", cents / 100.0)
+        except Exception as exc:
+            isolated("finance.tool", exc)
+            return "金融信息暂时读不到。"
+
+    def _format_money(self, sub=""):
+        sub = str(sub or "").strip()
+        repo = self.finance_repo
+        cash = self.finance.balance_cents() or 0
+        rows = repo.positions() if repo else []
+        market = sum(int(r.get("last_cents") or 0) * float(r.get("qty") or 0) for r in rows)
+        loans = repo.loans() if repo else []
+        debt = sum(int(x.get("balance_cents") or 0) for x in loans)
+        word = self.finance.mood().get("word") or "平静"
+        if sub in ("", "菜单"):
+            return ("理财菜单：1 总资产 2 持仓 3 贷款 4 日程 0 关闭\n"
+                    "也可以直接发 /理财 总资产、/理财 持仓、/理财 贷款、/理财 日程、/理财 关闭")
+        if sub in ("总资产", "1"):
+            return "总资产 ¥%.2f（余额 ¥%.2f + 持仓 ¥%.2f − 负债 ¥%.2f），她现在%s。" % (
+                (cash + market - debt) / 100.0, cash / 100.0, market / 100.0, debt / 100.0, word)
+        if sub in ("持仓", "2"):
+            if not rows:
+                return "她现在空仓，%s。" % word
+            return "\n".join("%s(%s) %s股 成本%.2f 现价%.2f %+.1f%%" % (
+                r.get("name") or r.get("code"), r.get("code"), r.get("qty"),
+                int(r.get("cost_cents") or 0) / 100.0, int(r.get("last_cents") or 0) / 100.0,
+                ((int(r.get("last_cents") or 0) - int(r.get("cost_cents") or 0))
+                 / max(1, int(r.get("cost_cents") or 0)) * 100.0)) for r in rows)
+        if sub in ("贷款", "3"):
+            if not loans:
+                return "她现在没有贷款。"
+            return "\n".join("%s 本金%.2f 年利率%.2f%% %d期 每期%.2f 剩余%.2f" % (
+                x.get("kind"), int(x.get("principal_cents") or 0) / 100.0, float(x.get("rate") or 0) * 100,
+                int(x.get("months") or 0), int(x.get("monthly_cents") or 0) / 100.0,
+                int(x.get("balance_cents") or 0) / 100.0) for x in loans)
+        if sub in ("日程", "4"):
+            try:
+                day = time.strftime("%Y-%m-%d")
+                amo = self.finance._amo()
+                items = (amo.state.schedule.get(day) or []) if amo is not None else []
+            except Exception:
+                items = []
+            lines = [x for x in items if str(x.get("category")) == "finance"]
+            if not lines:
+                return "今天没有财务日程。"
+            return "\n".join("%s-%s %s %s" % (x.get("start"), x.get("end"), x.get("activity"), x.get("detail") or "") for x in lines)
+        if sub in ("关闭", "0"):
+            if not rows:
+                return "持仓简报：当前空仓。"
+            return "持仓简报：\n" + "\n".join("%s %s股 成本%.2f 现价%.2f %+.1f%%" % (
+                r.get("name") or r.get("code"), r.get("qty"),
+                int(r.get("cost_cents") or 0) / 100.0, int(r.get("last_cents") or 0) / 100.0,
+                ((int(r.get("last_cents") or 0) - int(r.get("cost_cents") or 0))
+                 / max(1, int(r.get("cost_cents") or 0)) * 100.0)) for r in rows)
+        return "没听懂，发 /理财 看菜单。"
+
+    async def on_recommend(self, event):
+        """用户说「建议买 600519/贵州茅台」：只入候选池，不买入。"""
+        text = str(getattr(event, "message_str", "") or "").strip()
+        if not re.search(r"(建议|推荐).{0,4}买", text):
+            return
+        try:
+            result = self.finance_pools.recommend(text) if self.finance_pools else {"ok": False, "message": "候选池未就绪"}
+        except Exception as exc:
+            isolated("finance.recommend", exc)
+            result = {"ok": False, "message": "记候选失败"}
+        if result.get("ok"):
+            try:
+                await self.finance.memory.remember(
+                    "%s 用户建议买 %s，已放进候选池（7 天有效，不买入）" % (
+                        time.strftime("%Y-%m-%d %H:%M"), result.get("code")),
+                    kind="finance", idem="rec:" + str(result.get("code")) + ":" + time.strftime("%Y%m%d"))
+            except Exception:
+                pass
+        yield event.plain_result(result.get("message") or "记下了")
 
     async def on_transfer(self, event):
         """用户发 [转账]100元：只作为注资，不替她下单。"""
@@ -565,7 +757,10 @@ class WatchPlugin(Star):
     # 命令装饰器只做注册；离线单测（没有 astrbot.api.event）时方法照样能直接调
     if filter is not None:
         watch_cmd = filter.command("watch")(watch_cmd)
+        money_cmd = filter.command("理财")(money_cmd)
         on_transfer = filter.event_message_type(filter.EventMessageType.ALL)(on_transfer)
+        on_recommend = filter.event_message_type(filter.EventMessageType.ALL)(on_recommend)
+        finance_tool = filter.llm_tool(name="finance")(finance_tool)
 
 
 def _tid() -> str:

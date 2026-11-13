@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import random
 
 try:
@@ -25,13 +26,14 @@ CANDIDATES = ("600519", "000001", "300750", "600036")
 
 
 class FinanceDecision:
-    def __init__(self, plugin, runtime, repo, finance, trading, help_=None):
+    def __init__(self, plugin, runtime, repo, finance, trading, help_=None, pools=None):
         self.plugin = plugin
         self.runtime = runtime
         self.repo = repo
         self.finance = finance
         self.trading = trading
         self.help = help_
+        self.pools = pools
 
     # ---------- 上下文 ----------
     def _positions(self):
@@ -117,12 +119,39 @@ class FinanceDecision:
     async def run_slot(self, slot, now=None):
         now = now or _dt.datetime.now()
         positions = self._positions()
-        codes = [p["code"] for p in positions] + list(CANDIDATES)
+        codes = [p["code"] for p in positions]
+        if self.pools is not None:
+            for code in self.pools.daily_anchors(now.date().isoformat()):
+                if code not in codes:
+                    codes.append(code)
+            for row in self.pools.repo.candidates():
+                code = str(row.get("code") or "")
+                if code and code not in codes:
+                    codes.append(code)
+        else:
+            codes += list(CANDIDATES)
         quotes = await self._refresh(codes)
+        if self.pools is not None:
+            self.pools.remember_names(quotes)
+            observation = self.pools.observe(quotes, now.date().isoformat())
+            for code in observation:
+                if code not in codes:
+                    codes.append(code)
         cash = self.finance.balance_cents() or 0
         mood = self.finance.mood()
-        decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
-                               random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
+        decision = None
+        try:
+            from .finance_llm import llm_decide
+        except ImportError:  # 直接按文件加载时
+            from finance_llm import llm_decide
+        if self.plugin is not None:
+            allowed = {p["code"] for p in positions}
+            if self.pools is not None:
+                allowed |= set(self.pools.affordable(quotes, cash))
+            decision = await llm_decide(self.plugin, cash, positions, quotes, mood.get("word"), allowed)
+        if not decision:
+            decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
+                                   random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
         executed = {"ok": False, "message": "只复盘，不成交"}
         if slot != "noon":
             executed = await self._execute(slot, decision, now)
@@ -147,6 +176,14 @@ class FinanceDecision:
         line = "%s 决策：%s" % (when, decision["reason"])
         if executed.get("ok"):
             line += "；%s" % executed.get("message", "")
+        try:
+            self.repo.meta_set("last_decision", json.dumps({
+                "slot": slot, "action": decision.get("action"), "code": decision.get("code"),
+                "reason": decision.get("reason"), "at": now.strftime("%m-%d %H:%M"),
+                "executed": bool(executed.get("ok")),
+            }, ensure_ascii=False))
+        except Exception as exc:
+            isolated("finance.decision.meta", exc)
         await self.finance.memory.remember(line, kind="finance_decision",
                                            idem="decision:%s:%s:mem" % (now.date().isoformat(), slot))
         try:

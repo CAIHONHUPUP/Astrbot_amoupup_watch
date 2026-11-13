@@ -143,6 +143,7 @@
       <button class="ghost" data-open="trade" style="margin-left:auto">交易</button>
     </div>
     <div class="demo-note" id="demoNote">演示数据：只用于预览布局，不写库、不扣款</div>
+    <div class="demo-note" id="lowNote"></div>
 
     <div class="tiles">
       <div class="tile hero-tile"><div class="k">总资产</div><div class="v" id="f-total">¥—</div><div class="s">可用余额 + 持仓市值</div></div>
@@ -199,6 +200,11 @@
     <div class="card">
       <div class="card-h"><h2>行情</h2><span class="tag" id="marketTag">今日 0/2</span><span class="tag" id="marketSrc">腾讯 qt.gtimg.cn</span></div>
       <div class="mood-line" id="marketLine">每天三次：9:30 早盘 / 11:30 午间 / 14:50 收盘前；只查实际持仓</div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>最近决策</h2><span class="tag" id="decisionTag">—</span></div>
+      <div class="mood-line" id="decisionLine">还没有决策记录</div>
     </div>
 
     <div class="card">
@@ -362,6 +368,8 @@
     renderBank(d.bank || {});
     renderPlan(d.plan || {});
     renderMarket(d.market || {});
+    renderDecision(d.decision || {});
+    renderHelp(d.help || {});
     renderTrades(d.trades || []);
   }
 
@@ -445,6 +453,29 @@
     q("planTag").textContent = (p.deposit || 0) >= (h.price || Infinity) ? "存款够全款" : "存款够再考虑";
     if (p.rule) q("p-rule").textContent = p.rule;
   }
+  function renderDecision(decision) {
+    var tag = q("decisionTag"), line = q("decisionLine");
+    if (!decision || !decision.reason) {
+      tag.textContent = "—";
+      line.textContent = "还没有决策记录";
+      return;
+    }
+    var label = decision.action === "buy" ? "买入" : (decision.action === "sell" ? "卖出" : "不动");
+    tag.textContent = label + (decision.executed ? " · 已执行" : " · 仅记录");
+    line.textContent = (decision.at || "") + "  " + decision.reason;
+  }
+
+  function renderHelp(state) {
+    var note = q("lowNote");
+    if (state && state.low && state.prompt) {
+      note.textContent = state.prompt;
+      note.classList.add("show");
+    } else {
+      note.textContent = "";
+      note.classList.remove("show");
+    }
+  }
+
   function renderTrades(list) {
     var host = q("tradeList");
     host.innerHTML = "";

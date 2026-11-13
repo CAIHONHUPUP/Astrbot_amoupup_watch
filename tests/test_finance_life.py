@@ -13,6 +13,14 @@ class FakeFinance:
     def __init__(self, ok=True):
         self.calls = []
         self.ok = ok
+        self.cash = 2300000
+
+    def balance_cents(self):
+        return self.cash
+
+    def credit_initial(self, cents):
+        self.cash += cents
+        return True
 
     async def income(self, cents, reason, idem, salary=False):
         self.calls.append(("income", cents, reason, idem, salary))
@@ -50,8 +58,12 @@ def test_rent_and_utilities_once(env):
     asyncio.run(life.tick(dt.datetime(2026, 11, 1)))
     asyncio.run(life.tick(dt.datetime(2026, 11, 2)))
     expenses = [c for c in finance.calls if c[0] == "expense"]
-    assert len(expenses) == 2
-    assert {c[2] for c in expenses} == {"房租", "水电燃气"}
+    names = [c[2] for c in expenses]
+    assert "房租" in names
+    assert {"水费", "电费", "燃气费", "宽带"} <= set(names)
+    # 再 tick 一次不重复扣
+    asyncio.run(life.tick(dt.datetime(2026, 11, 3)))
+    assert len([c for c in finance.calls if c[0] == "expense"]) == len(expenses)
 
 
 def test_house_skips_rent(env):
@@ -59,7 +71,7 @@ def test_house_skips_rent(env):
     repo.add_asset("house", "出租屋", 120000000)
     asyncio.run(life.tick(dt.datetime(2026, 11, 1)))
     reasons = [c[2] for c in finance.calls if c[0] == "expense"]
-    assert "房租" not in reasons and "水电燃气" in reasons
+    assert "房租" not in reasons and "电费" in reasons
 
 
 def test_failed_payment_does_not_mark_settled(env):
