@@ -38,6 +38,7 @@ try:  # 包模式
     from .finance_help import FinanceHelp
     from .finance_life import FinanceLife
     from .finance_link import FinanceLink
+    from .finance_memory_tier import TieredMemory
     from .finance_store import FinanceRepo
     from .finance_trading import Trading
     from .guard import guard_sync, isolated
@@ -52,6 +53,7 @@ except ImportError:  # 直接按文件加载时
     from finance_help import FinanceHelp
     from finance_life import FinanceLife
     from finance_link import FinanceLink
+    from finance_memory_tier import TieredMemory
     from finance_store import FinanceRepo
     from finance_trading import Trading
     from guard import guard_sync, isolated
@@ -82,6 +84,7 @@ class WatchPlugin(Star):
         self.finance_consume = None
         self.finance_decision = None
         self.finance_daily = None
+        self.finance_memory = None
         self.finance_pools = None
         self._closed = asyncio.Event()
         self._started_at = 0.0
@@ -115,6 +118,7 @@ class WatchPlugin(Star):
                 self.finance.backfill_withdrawable()
             except Exception as exc:
                 isolated("finance.withdrawable_boot", exc)
+            self.finance_memory = TieredMemory(self, self.finance_repo, self.finance.memory)
             self.finance_pools = CandidatePools(self, self.finance_repo)
             self.finance_decision = FinanceDecision(
                 self, self.runtime, self.finance_repo, self.finance, self.trading,

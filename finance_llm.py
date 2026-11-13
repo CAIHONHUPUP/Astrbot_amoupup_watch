@@ -72,7 +72,7 @@ def parse_decision(text, allowed_codes):
     return {"action": action, "code": code, "qty": qty, "reason": reason}
 
 
-async def llm_decide(plugin, cash_cents, positions, quotes, mood_word, allowed_codes=None):
+async def llm_decide(plugin, cash_cents, positions, quotes, mood_word, allowed_codes=None, news_text="", memory_text=""):
     provider = await _provider(plugin)
     if provider is None:
         return None
@@ -87,6 +87,10 @@ async def llm_decide(plugin, cash_cents, positions, quotes, mood_word, allowed_c
         cash="%.2f" % (int(cash_cents) / 100.0),
         positions=pos_text, quotes=quote_text, mood=mood_word or "平静",
         )
+    if news_text:
+        prompt += "\n新闻（参考，可忽略，可写进理由）：\n" + str(news_text)[:1200]
+    if memory_text:
+        prompt += "\n相关记忆（最多18条）：\n" + str(memory_text)[:1500]
     try:
         response = await provider.text_chat(prompt=prompt, system_prompt=SYSTEM, contexts=[])
         text = str(getattr(response, "completion_text", "") or "")

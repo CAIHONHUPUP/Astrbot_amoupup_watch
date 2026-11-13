@@ -144,11 +144,43 @@ class FinanceDecision:
             from .finance_llm import llm_decide
         except ImportError:  # 直接按文件加载时
             from finance_llm import llm_decide
+        news_text = ""
+        self._news_used = False
+        try:
+            from .finance_news import fetch_cls, fetch_eastmoney, merge_stock_news
+        except ImportError:  # 直接按文件加载时
+            from finance_news import fetch_cls, fetch_eastmoney, merge_stock_news
+        try:
+            market = await self.runtime.run_io(fetch_eastmoney, "财经", "global", 5, timeout=10) or []
+            if not market:
+                market = await self.runtime.run_io(fetch_cls, 6, timeout=10) or []
+            parts = []
+            if market:
+                parts.append("市场：" + "；".join(str(x.get("title") or "")[:40] for x in market[:5]))
+            for p in positions[:5]:
+                items = await self.runtime.run_io(fetch_eastmoney, p["code"], "stock", 3, timeout=10) or []
+                merged = merge_stock_news(p["code"], items, now.date().isoformat())
+                if merged:
+                    parts.append(merged)
+                    tm = getattr(self.plugin, "finance_memory", None)
+                    if tm is not None:
+                        await tm.remember("news", merged,
+                                          "news:%s:%s" % (now.date().isoformat(), p["code"]),
+                                          related=p["code"])
+            news_text = "\n".join(parts)
+            self._news_used = bool(news_text)
+        except Exception as exc:
+            isolated("finance.news.inject", exc)
         if self.plugin is not None:
             allowed = {p["code"] for p in positions}
             if self.pools is not None:
                 allowed |= set(self.pools.affordable(quotes, cash))
-            decision = await llm_decide(self.plugin, cash, positions, quotes, mood.get("word"), allowed)
+            memory_text = ""
+            tm = getattr(self.plugin, "finance_memory", None)
+            if tm is not None:
+                memory_text = tm.context_text([p["code"] for p in positions] + list(allowed), limit=18)
+            decision = await llm_decide(self.plugin, cash, positions, quotes, mood.get("word"), allowed,
+                                        news_text, memory_text)
         if not decision:
             decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
                                    random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
@@ -189,8 +221,11 @@ class FinanceDecision:
         try:
             amo = self.finance._amo()
             if amo is not None:
+                extra = ""
+                if getattr(self, "_news_used", False):
+                    extra = "看了新闻，" + ("参考着做了决定。" if executed.get("ok") else "没太看懂，没动。")
                 amo.db.save_diary(now.date().isoformat(), "%02d" % now.hour,
-                                  "今天%s，%s。" % (decision["reason"], mood["word"]))
+                                  "今天%s，%s。%s" % (decision["reason"], mood["word"], extra))
         except Exception as exc:
             isolated("finance.decision.diary", exc)
 

@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS assets (
     kind TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
     value_cents INTEGER NOT NULL DEFAULT 0, ts REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS memory_index (
+    idem TEXT PRIMARY KEY, tier TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
+    related TEXT NOT NULL DEFAULT '', created REAL NOT NULL, expires_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+);
+CREATE INDEX IF NOT EXISTS idx_memory_tier ON memory_index(tier, status, created);
 CREATE TABLE IF NOT EXISTS pending_credits (
     idem TEXT PRIMARY KEY, kind TEXT NOT NULL,
     amount_cents INTEGER NOT NULL DEFAULT 0, due_day TEXT NOT NULL,
