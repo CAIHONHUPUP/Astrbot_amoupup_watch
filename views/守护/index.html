@@ -108,6 +108,14 @@
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .demo-note { display:none; margin:0 0 10px; font-size:12px; color:#b45309; background:#fff8ed; border:1px solid #fde3bd; border-radius:10px; padding:6px 10px; }
   .demo-note.show { display:block; }
+  .card.collapsible > .card-body { display:none; }
+  .card.collapsible.open > .card-body { display:block; animation:fade .15s ease; }
+  .card.collapsible .card-h { cursor:pointer; user-select:none; }
+  .card.collapsible .chev { margin-left:8px; color:var(--muted); font-size:11px; transition:transform .18s; }
+  .card.collapsible.open .chev { transform:rotate(90deg); }
+  .card.collapsible .closer { display:none; }
+  .card.collapsible.open .closer { display:inline-block; }
+  .card.collapsible .card-h button, .card.collapsible .card-h input { cursor:pointer; }
 </style>
 </head>
 <body>
@@ -490,7 +498,11 @@
   function loadFinance() {
     apiGet(fin.mode === "demo" ? API_FIN_DEMO : API_FIN)
       .then(renderFinance)
-      .catch(function () { q("finHint").textContent = "后端未就绪"; });
+      .catch(function () {
+        q("finHint").textContent = "后端未就绪，显示占位";
+        renderFinance({ mode: "real", wallet: {}, positions: [], trades: [], life: {}, mood: {}, market: {}, bank: {}, plan: {} });
+        initCollapsible();
+      });
   }
 
   q("modeSeg").addEventListener("click", function (e) {
@@ -585,8 +597,39 @@
   }
 
   q("refresh").addEventListener("click", refreshStatus);
+  // ---------- 折叠 ----------
+  function initCollapsible() {
+    document.querySelectorAll("#tab-finance .card").forEach(function (card) {
+      if (card.dataset.collapsible) return;
+      var head = card.querySelector(".card-h");
+      if (!head) return;
+      card.dataset.collapsible = "1";
+      card.classList.add("collapsible");
+      var body = document.createElement("div");
+      body.className = "card-body";
+      var node = head.nextElementSibling;
+      while (node) { var next = node.nextElementSibling; body.appendChild(node); node = next; }
+      card.appendChild(body);
+      var chev = document.createElement("span");
+      chev.className = "chev";
+      chev.textContent = "▸";
+      head.appendChild(chev);
+      var closer = document.createElement("button");
+      closer.className = "ghost closer";
+      closer.textContent = "收起";
+      closer.style.marginTop = "10px";
+      closer.addEventListener("click", function (e) { e.stopPropagation(); card.classList.remove("open"); });
+      body.appendChild(closer);
+      head.addEventListener("click", function (e) {
+        if (e.target.closest("button")) return;
+        card.classList.toggle("open");
+      });
+    });
+  }
+
   loadFinance();
   refreshStatus();
+  initCollapsible();
   setInterval(refreshStatus, 15000);
 })();
 </script>
