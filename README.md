@@ -9,6 +9,8 @@
 - 握手契约：[docs/HANDSHAKE.md](docs/HANDSHAKE.md)
 - 作者：彩虹upup
 
+
+## 0.2.2 城市来源：amo 优先
 ## 目录结构（2026-11-13 分层重构，依赖单向）
 
     Astrbot_amoupup_watch/

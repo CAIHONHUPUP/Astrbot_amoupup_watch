@@ -18,9 +18,6 @@ def current_city(plugin):
 
     优先级：/城市 指令设置 > 插件配置 city > amo 的日程城市。
     """
-    override = str(getattr(plugin, "city_override", "") or "").strip()
-    if override:
-        return override
     config = getattr(plugin, "config", {}) or {}
     for key in ("city", "schedule_city"):
         value = str(config.get(key) or "").strip()
@@ -51,6 +48,10 @@ def current_city(plugin):
                     return value
     except Exception as exc:
         isolated("city.amo", exc)
+    # amo 不可用（或它没配城市）时，才用 /城市 记录的「搬家」兜底
+    override = str(getattr(plugin, "city_override", "") or "").strip()
+    if override:
+        return override
     return ""
 
 
