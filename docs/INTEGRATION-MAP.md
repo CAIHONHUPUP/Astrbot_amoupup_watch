@@ -149,3 +149,19 @@
 | 5 | `amo_api_diary.py` | `write_diary_text(day, text)` | 长日记写指定文本 |
 | 6 | `amo_human_state.py` + 表 | `add_reminder(...)` + `reminders` | 工资/房租提醒（可延后） |
 | 7 | `watch/main.py` | `_finance_snapshot` 委托金融实例 | 面板数据 |
+
+---
+
+## 9. 实施记录（2026-11-13，已落地）
+
+| # | 改动 | 文件 | 状态 |
+|---|---|---|---|
+| 1 | 钱包（表 + 方法，无 UI） | `amo_wallet.py`（新） | ✅ 已上线，`wallet_account` / `wallet_ledger` 已建，cash=0 |
+| 2 | 接线 | `amo/main.py`：`self.wallet = Wallet(self.db)`；`_ensure_ready` 里 `to_thread(self.wallet.ensure_schema)` | ✅ |
+| 3 | 心情幂等 | `HumanState.nudge_once(idem, **deltas) -> bool` | ✅ |
+| 4 | 日程追加 | `HumanState.add_schedule_item(day, item, source="finance", reason="") -> dict` | ✅ |
+| 5 | 长日记写指定文本 | `DiaryApiMixin.write_diary_text(day, text) -> {"code","data"/"msg"}` | ✅ |
+| 6 | 守护面板委托 | `WatchPlugin._finance_provider()` + `_finance_snapshot` 优先问 `Astrbot_amoupup_finance.snapshot()` | ✅（金融插件未装时回退空态） |
+
+验证：amo 全量 **1462 passed / 8 skipped**；线上重载成功；钱包两表存在、cash=0；日志无钱包报错。
+提醒（`add_reminder`）仍按约定留到 v2。
