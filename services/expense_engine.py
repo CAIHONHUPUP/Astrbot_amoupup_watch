@@ -92,8 +92,22 @@ class FinanceExpense:
             return {"委屈": 8, "难过": 6}      # 随份子 500+
         return None                            # 日用品等：平静
 
+    def _sick_guard(self, category, amount_cents, label, day=None):
+        """生病期间：禁冲动消费，三餐换成白粥/面条（10-15 元档）。"""
+        medical = getattr(self.plugin, "medical", None)
+        if medical is None or not medical.is_sick(day):
+            return label, int(amount_cents), None
+        if category == "impulse":
+            return label, int(amount_cents), "生病了别乱花钱"
+        if category == "food" and int(amount_cents) > 1500:
+            return "白粥", 800, None
+        return label, int(amount_cents), None
+
     async def spend(self, category, label, amount_cents, day=None, idem="", necessary=False):
         """扣一笔日常开销：先扣钱，成功才记账。买不起就返回失败，不记账。"""
+        label, amount_cents, blocked = self._sick_guard(category, amount_cents, label, day)
+        if blocked:
+            return {"ok": False, "reason": blocked, "skipped": True}
         day_text = day.isoformat() if hasattr(day, "isoformat") else str(day or _dt.date.today())
         amount = int(amount_cents)
         if amount <= 0:

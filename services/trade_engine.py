@@ -9,13 +9,10 @@
 from __future__ import annotations
 
 import datetime as _dt
-import time
 
 try:
-    from ..guard import isolated
     from ..utils.helpers import fund_cutoff, in_session, is_trading_day, next_trading_day
 except ImportError:  # 按文件/顶层包加载时
-    from guard import isolated
     from utils.helpers import fund_cutoff, in_session, is_trading_day, next_trading_day
 from .market_api import fetch_quotes
 
@@ -129,7 +126,7 @@ class Trading:
             return {"ok": False, "message": "停牌，无法成交"}
         if self._one_word(quote, up=True) and not price:
             return {"ok": False, "message": "一字涨停，买不进"}
-        price = float(quote["price"])
+        price = float(price or quote["price"])  # 显式价优先，涨跌停仍按行情校验
         prev = float(quote.get("prev_close") or price)
         ratio = limit_ratio(code)
         if price > prev * (1 + ratio) or price < prev * (1 - ratio):
@@ -175,7 +172,7 @@ class Trading:
             return {"ok": False, "message": "停牌，无法卖出"}
         if self._one_word(quote, up=False) and not price:
             return {"ok": False, "message": "一字跌停，卖不出"}
-        price = float(quote["price"])
+        price = float(price or quote["price"])  # 显式价优先，涨跌停仍按行情校验
         price_cents = int(round(price * 100))
         amount = price_cents * qty
         fee = _fee_sell(amount)

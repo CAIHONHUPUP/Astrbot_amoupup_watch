@@ -253,6 +253,8 @@ class FinanceProperty:
                                      principal, principal, rate, months, monthly)
         self.repo.add_asset(kind, label, price)
         self.repo.meta_set("buy:%s" % kind, day)
+        # 买房/买车成功 → 次日保险决策强制提示一次
+        self.repo.meta_set("new_asset_event", "house" if kind == "house" else "car")
         mood = ""
         try:
             mood = str(self.finance.mood().get("word") or "")

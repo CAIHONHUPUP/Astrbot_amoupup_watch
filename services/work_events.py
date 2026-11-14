@@ -14,15 +14,14 @@
 from __future__ import annotations
 
 import datetime as _dt
-import hashlib
 import json
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import is_trading_day, parse_day, stable_int, yuan
+    from ..utils.helpers import is_holiday, is_trading_day, parse_day, stable_int, yuan
 except ImportError:  # 直接按文件加载时
     from guard import isolated
-    from utils.helpers import is_trading_day, parse_day, stable_int, yuan
+    from utils.helpers import is_holiday, is_trading_day, parse_day, stable_int, yuan
 
 KIND_LATE = "late"
 KIND_SICK = "sick"
@@ -42,7 +41,7 @@ LABELS = {
 #: 这个月出现这些标签就不算全勤
 ABSENCE_LABELS = ("迟到", "早退", "事假", "病假")
 
-PROJECT_RANGE = (50000, 100000)   # 500–1000 元
+PROJECT_RANGE = (20000, 50000)    # 200–500 元（2026-11-13 用户明确）
 FULL_BONUS_CENTS = 30000          # 300 元
 
 
@@ -98,7 +97,8 @@ class WorkEventEngine:
             amount = int(row.get("amount_cents") or 0)
             sign = "+" if amount >= 0 else "-"
             parts.append("%s %s%s" % (row.get("label"), sign, yuan(abs(amount))))
-        mood = "开心" if any(int(r.get("amount_cents") or 0) > 0 for r in rows) else "低落"
+        mood = next((r.get("mood_word") for r in rows if r.get("mood_word")), "")
+        mood = mood or ("开心" if any(int(r.get("amount_cents") or 0) > 0 for r in rows) else "低落")
         return ("【今日职场】" + "；".join(parts) + "。她今天心情%s，"
                 "聊天时可以主动吐槽或炫耀，但不要把数字念成流水账。" % mood)
 
@@ -149,7 +149,7 @@ class WorkEventEngine:
         # 当日状态（供 UI / prompt 使用）
         self._push_status(day_text, {"kind": kind, "label": label,
                                      "amount_cents": amount, "at": _dt.datetime.now().strftime("%H:%M"),
-                                     "source": source})
+                                     "mood_word": plan.get("mood_word", ""), "source": source})
         # 奖金可能引发冲动消费
         if kind == KIND_PROJECT and stable_int("impulse:" + key, 0, 100) < 35:
             try:
@@ -158,7 +158,8 @@ class WorkEventEngine:
                 isolated("work.impulse", exc)
         return {"ok": True, "kind": kind, "label": label, "amount_cents": amount,
                 "day": day_text, "mood": plan["mood"], "diary": plan["diary"],
-                "card": "[%s] %s%s" % (label, "+" if amount >= 0 else "-", yuan(abs(amount))),
+                "card": "[%s] %s%s" % (plan.get("card_label") or label,
+                                       "+" if amount >= 0 else "-", yuan(abs(amount))),
                 "net_cents": self.salary.summary(period)["net_cents"]}
 
     async def _impulse(self, day, key):
@@ -171,24 +172,26 @@ class WorkEventEngine:
 
     def _plan(self, kind, rate, day, amount_cents):
         if kind == KIND_LATE:
-            return {"label": LABELS[kind], "amount_cents": -5000,
+            return {"label": LABELS[kind], "card_label": "迟到", "mood_word": "低落",
+                    "amount_cents": -5000,
                     "schedule": "上班迟到", "activity": "迟到",
                     "diary": "早上又迟到，被扣了50块，气死我了，打工好难呜呜。",
                     "mood": {"郁闷": 8, "委屈": 5}}
         if kind == KIND_SICK:
-            return {"label": LABELS[kind], "amount_cents": -rate,
+            return {"label": LABELS[kind], "mood_word": "低落", "amount_cents": -rate,
                     "schedule": "病假休息", "activity": "病假",
                     "diary": "生病请假还得被扣钱，难受，这破公司。",
                     "mood": {"疲惫": 8, "委屈": 6}}
         if kind == KIND_PROJECT:
             amount = int(amount_cents) if amount_cents else stable_int("project:" + day.isoformat(), *PROJECT_RANGE)
-            return {"label": LABELS[kind], "amount_cents": abs(amount),
+            return {"label": LABELS[kind], "mood_word": "狂喜", "amount_cents": abs(amount),
                     "schedule": "项目进度超额", "activity": "项目奖励",
                     "diary": "项目拿奖金了！多了%s块，今晚去吃顿好的！" % ("%.0f" % (abs(amount) / 100.0)),
                     "mood": {"开心": 12, "兴奋": 8}}
         if kind == KIND_OVERTIME:
-            amount = int(amount_cents) if amount_cents else rate * 2
-            label = "周末加班" if day.weekday() >= 5 else "加班"
+            holiday = is_holiday(day)
+            amount = int(amount_cents) if amount_cents else rate * (3 if holiday else 2)
+            label = "节假日加班" if holiday else ("周末加班" if day.weekday() >= 5 else "加班")
             return {"label": label, "amount_cents": abs(amount),
                     "schedule": "周末加班", "activity": "加班",
                     "diary": "周末还在加班，累死了……不过加班费到手，值了。",
@@ -262,6 +265,9 @@ class WorkEventEngine:
             return None
         if not is_trading_day(day):
             self.repo.meta_set(flag, "off")
+            return None
+        # 只在早上掷（06:30–11:00），像真实的上班路上/工位前
+        if now.hour < 6 or now.hour >= 11:
             return None
         self.repo.meta_set(flag, "1")
         roll = stable_int("late:" + day.isoformat(), 0, 100)

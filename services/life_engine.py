@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import time
 
 try:
     from ..utils.helpers import city_factor, rent_cents as base_rent_cents
@@ -123,10 +124,119 @@ class FinanceLife:
             self.repo.meta_set("base_salary_cents", new)
         return {"from": old, "to": new, "pct": pct}
 
+    # ---------- 饥饿 / 主动觅食 ----------
+    def _hunger_fallback(self, now):
+        """没有陪伴饥饿接口时：上一顿正餐超过 6 小时算饿。"""
+        try:
+            last = float(self.repo.meta_get("last_meal_at", 0) or 0)
+        except Exception:
+            last = 0
+        if not last:
+            return 25.0 if now.hour >= 20 else 100.0
+        return 20.0 if (now.timestamp() - last) > 6 * 3600 else 100.0
+
+    async def _check_hunger(self, now=None):
+        now = now or _dt.datetime.now()
+        finance = getattr(self, "finance", None)
+        amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+        state = {}
+        if amo is not None and hasattr(amo, "hunger_state"):
+            try:
+                state = amo.hunger_state() or {}
+            except Exception:
+                state = {}
+        if not state:
+            state = {"value": self._hunger_fallback(now), "cooldown_until": 0, "sick": False}
+        if float(state.get("cooldown_until") or 0) > time.time():
+            return None
+        if float(state.get("value") or 100) >= 30:
+            return None
+        cash = int(finance.balance_cents() or 0)
+        if cash < 500:
+            text = "老公，我肚子好饿，但是微信里连买个包子的钱都不够了，呜呜呜……"
+            try:
+                if amo is not None and hasattr(amo, "hunger_help"):
+                    await amo.hunger_help(text)
+                elif amo is not None and hasattr(amo, "request_hunger_help"):
+                    amo.request_hunger_help()
+            except Exception:
+                pass
+            try:
+                finance.nudge_mood({"委屈": 25, "郁闷": 20, "焦虑": 15},
+                                   "hunger:help:%s" % time.strftime("%Y%m%d"))
+                finance.small_diary("肚子好饿，翻遍了房间只有一包过期的饼干……")
+            except Exception:
+                pass
+            return {"help": True}
+        sick = bool(state.get("sick"))
+        mood = finance.mood() or {}
+        night = now.hour >= 23 or now.hour < 5
+        if cash < 5000:
+            food, amount, gain, deltas, mood_word = ("馒头和泡面", 800, 15, {"委屈": 10}, "有点委屈")
+        elif sick:
+            food, amount, gain, deltas, mood_word = ("白粥和清淡面条", 1200, 25, {"委屈": 6}, "淡淡的")
+        elif night:
+            food, amount, gain, deltas, mood_word = ("烧烤和泡面", 2800, 30, {"开心": 4, "疲惫": -2}, "罪恶又爽")
+        elif (float(mood.get("郁闷") or 0) + float(mood.get("疲惫") or 0)) >= 120:
+            food, amount, gain, deltas, mood_word = ("炸鸡和奶茶", 4000, 30, {"开心": 10, "委屈": -4}, "罪恶又爽")
+        else:
+            food, amount, gain, deltas, mood_word = ("一碗热汤面", 2000, 40, {"开心": 5}, "满足")
+        try:
+            factor = float(factor_of(current_city(self.plugin)) or 1.0)
+            amount = max(500, int(round(amount * factor)))
+        except Exception:
+            pass
+        if cash < amount and self.plugin is not None:
+            try:
+                bank = getattr(self.plugin, "bank", None)
+                if bank is None:
+                    try:
+                        from ..services.bank_engine import build_bank
+                    except ImportError:
+                        from services.bank_engine import build_bank
+                    bank = build_bank(self.plugin)
+                    self.plugin.bank = bank
+                need = amount - cash
+                if int(bank.current_cents()) >= need:
+                    await bank.withdraw(need, 0)
+            except Exception:
+                pass
+        idem = "hunger:%s:%s" % (time.strftime("%Y%m%d%H"), food)
+        res = await finance.expense(amount, "吃的：%s" % food, idem, necessary=True)
+        if not isinstance(res, dict) or not res.get("ok"):
+            return None
+        try:
+            if amo is not None and hasattr(amo, "add_hunger"):
+                amo.add_hunger("amo", gain)
+                amo.mark_meal(food, 4, mood_word)
+            if self.repo is not None:
+                self.repo.meta_set("last_meal_at", time.time())
+        except Exception:
+            pass
+        try:
+            finance.nudge_mood(deltas, idem + ":mood")
+            if sick:
+                diary = "生病了只能喝粥，好想吃火锅。"
+            elif night:
+                diary = "今天半夜饿了，没忍住煮了包泡面，加了根肠，花了 %d 块钱。" % max(1, amount // 100)
+            else:
+                diary = "饿了，买了%s，花了 %.2f 元，吃完舒服多了。" % (food, amount / 100.0)
+            finance.small_diary(diary)
+            hour = int(getattr(now, "hour", 12))
+            if hour >= 23 or hour < 5:
+                await finance.permanent_memory("半夜饿得不行，吃了%s。" % food, idem + ":mem")
+        except Exception:
+            pass
+        return {"food": food, "amount": amount, "gain": gain, "mood": mood_word}
+
     # ---------- 结算 ----------
     async def tick(self, now=None):
         now = now or _dt.datetime.now()
         self.ensure_seed()
+        try:
+            await self._check_hunger(now)
+        except Exception:
+            pass
         self._roll_half(now)
         period = now.strftime("%Y-%m")
         steps = {}

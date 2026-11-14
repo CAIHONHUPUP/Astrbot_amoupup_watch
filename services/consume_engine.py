@@ -5,9 +5,11 @@ from __future__ import annotations
 import time
 
 try:
-    from ..utils.helpers import city_factor
-except ImportError:  # 按顶层包（services.xxx）导入时
-    from utils.helpers import city_factor
+    from ..guard import isolated
+    from ..utils.helpers import stable_int, yuan
+except ImportError:  # 按顶层包/单文件加载时
+    from guard import isolated
+    from utils.helpers import stable_int, yuan
 from .city import current_city, factor_of
 from .expense_engine import category_for
 

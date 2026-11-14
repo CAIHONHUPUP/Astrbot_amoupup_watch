@@ -17,7 +17,7 @@ import hashlib
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import parse_day
+    from ..utils.helpers import stable_int, parse_day
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
     from utils.helpers import parse_day
@@ -264,6 +264,12 @@ class FinanceSalary:
                 await engine.grant_full_attendance(period, day=now)
             except Exception as exc:
                 isolated("salary.full_attendance", exc)
+        try:
+            if int(now.month) == 1 and int(now.day) == 15:
+                months = 1 + stable_int("year_end:" + str(now.year), 0, 3)
+                self.add_item(period, "bonus", "年终奖", int(self.base_cents() * months))
+        except Exception as exc:
+            isolated("salary.year_end", exc)
         summary = self.summary(period)
         net = int(summary["net_cents"])
         if net <= 0:

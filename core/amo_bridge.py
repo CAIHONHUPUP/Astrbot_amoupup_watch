@@ -282,7 +282,32 @@ class FinanceLink:
                     reason or "收到一笔钱", yuan(amount_cents), before, after))
         return {"ok": bool(steps.get("wallet")), "mood": after, "steps": steps}
 
-    async def expense(self, amount_cents, reason, idem, necessary=False, quiet=False):
+    @staticmethod
+    def _expense_meta(reason):
+        text = str(reason or "")
+        table = (("早餐", ("包子", "豆浆", "油条", "早餐"), "餐饮", "早餐"),
+                 ("午餐", ("快餐", "面条", "米饭", "午饭", "午餐"), "餐饮", "午餐"),
+                 ("晚餐", ("晚饭", "晚餐", "米饭套餐"), "餐饮", "晚餐"),
+                 ("夜宵", ("烧烤", "泡面", "炸鸡", "夜宵"), "餐饮", "夜宵"),
+                 ("奶茶", ("奶茶",), "餐饮", "奶茶"),
+                 ("打车", ("打车", "出租", "滴滴"), "交通", "打车"),
+                 ("地铁", ("地铁", "公交", "通勤"), "交通", "公交地铁"),
+                 ("衣服", ("衣服", "裙", "裤", "鞋", "外套", "购物"), "购物", "衣物"),
+                 ("礼物", ("礼物", "礼盒", "按摩仪", "丝巾"), "人情", "礼物"),
+                 ("随礼", ("份子", "随礼", "红包"), "人情", "随礼"),
+                 ("保险", ("保险",), "保险", "保费"),
+                 ("房租", ("房租", "物业", "水电", "话费", "宽带"), "固定账单", "生活缴费"))
+        for _, words, cat, sub in table:
+            if any(word in text for word in words):
+                item = ""
+                m = re.search(r"[：:](.+)$", text)
+                if m:
+                    item = m.group(1).strip()
+                return cat, sub, item or text, text
+        return "其他", "日常", text, text
+
+    async def expense(self, amount_cents, reason, idem, necessary=False, quiet=False,
+                      category="", sub_category="", item_name="", trigger_reason=""):
         """quiet=True：日常逐笔消费——只写小日记，不进长期记忆（日终按分类汇总再记）。"""
         amo = self._amo()
         if amo is None:
@@ -290,12 +315,28 @@ class FinanceLink:
         steps = {}
         before = self.mood()["word"]
         try:
-            steps["wallet"] = bool(amo.wallet.debit(int(amount_cents), reason, idem))
+            cat, sub, item, trigger = self._expense_meta(reason)
+            stored_reason = reason
+            if "：" not in str(reason) and ":" not in str(reason):
+                stored_reason = (cat + "：" + item) if cat != "其他" else ("其他：" + str(reason or "日常"))
+            steps["wallet"] = bool(amo.wallet.debit(
+                int(amount_cents), stored_reason, idem,
+                category=category or cat, sub_category=sub_category or sub,
+                item_name=item_name or item, trigger_reason=trigger_reason or trigger))
         except Exception as exc:
             isolated("finance.expense.wallet", exc)
             steps["wallet"] = False
         if not steps["wallet"]:
             return {"ok": False, "reason": "余额不足", "mood": before, "steps": steps}
+        try:
+            import logging
+            logging.getLogger("amo.watch").info(
+                "[明细流水] 扣款: %.2f 元 | 物品: %s | 原因: %s | 余额: %.2f",
+                int(amount_cents) / 100.0,
+                item_name or reason, trigger_reason or reason,
+                int(self.balance_cents() or 0) / 100.0)
+        except Exception:
+            pass
         self._count("half_expense_cents", int(amount_cents))
         level = expense_level(int(amount_cents), necessary=necessary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"]) if level["deltas"] else True
@@ -311,6 +352,12 @@ class FinanceLink:
             reaction_line(after, idem))
         if not quiet:
             steps["memory"] = await self._tier("long", text, idem + ":mem", tag="expense")
+        try:
+            from ..services.bill_engine import prompt_line
+            if hasattr(amo, "note_expense_summary"):
+                amo.note_expense_summary(prompt_line(self))
+        except Exception:
+            pass
         return {"ok": True, "mood": after, "steps": steps}
 
     async def trade_pnl(self, pnl_cents, ratio, symbol, idem):
@@ -381,10 +428,19 @@ class FinanceLink:
         return await self._tier("permanent", str(text), str(idem))
 
     def small_diary(self, text):
-        """小日记：只写感受，不写长篇。"""
+        """小日记：有 LLM 时把真实事件改写成她的话；失败/无模型直接写事实。"""
         amo = self._amo()
         if amo is None:
             return False
+        if getattr(amo, "llm", None) is not None:
+            try:
+                import asyncio
+                from ..services.diary_engine import rewrite_and_save
+                loop = asyncio.get_running_loop()
+                loop.create_task(rewrite_and_save(self, amo, str(text)))
+                return True
+            except Exception:
+                pass
         return self._small_diary(amo, str(text))
 
     def add_schedule(self, day, activity, detail="", place="家", category="leave"):

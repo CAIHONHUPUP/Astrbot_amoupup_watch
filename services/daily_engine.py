@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import time
 import hashlib
 
 try:
@@ -82,6 +83,7 @@ class FinanceDaily:
             exp = getattr(self.plugin, "finance_expense", None)
             if any(r.get("ok") for r in results):
                 self.repo.meta_set(flag, "1")
+                self.repo.meta_set("last_meal_at", time.time())
                 if exp is not None:
                     exp.reset_meal_failure(day)
             elif exp is not None:

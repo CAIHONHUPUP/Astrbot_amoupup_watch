@@ -164,6 +164,12 @@ class FinanceRepo:
         rows = self._rows("SELECT * FROM assets WHERE kind=? ORDER BY ts DESC, id DESC LIMIT 1", (str(kind),))
         return rows[0] if rows else None
 
+    def assets_of(self, kind):
+        return self._rows("SELECT * FROM assets WHERE kind=? ORDER BY id", (str(kind),))
+
+    def remove_asset(self, asset_id):
+        return self.store.write("DELETE FROM assets WHERE id=?", (int(asset_id),))
+
     def assets(self):
         return self._rows("SELECT * FROM assets ORDER BY ts DESC")
 
@@ -220,6 +226,46 @@ class FinanceRepo:
     def expense_totals(self, period):
         return self._rows("SELECT category, SUM(amount_cents) AS total, COUNT(*) AS n "
                           "FROM expenses WHERE day LIKE ? GROUP BY category", (str(period) + "%",))
+
+    # ---------- 社交：NPC 关系 ----------
+    def npcs(self):
+        return self._rows("SELECT * FROM npc_relations ORDER BY id")
+
+    def npc_get(self, name):
+        rows = self._rows("SELECT * FROM npc_relations WHERE name=? LIMIT 1", (str(name),))
+        return rows[0] if rows else None
+
+    def upsert_npc(self, name, circle, relation, affinity=50, tags=""):
+        return self.store.write(
+            "INSERT INTO npc_relations(name,circle,relation,affinity,tags,updated_at) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET circle=excluded.circle, "
+            "relation=excluded.relation, tags=excluded.tags, updated_at=excluded.updated_at",
+            (str(name), str(circle), str(relation), int(affinity), str(tags), time.time()))
+
+    def set_affinity(self, name, affinity):
+        return self.store.write("UPDATE npc_relations SET affinity=?, updated_at=? WHERE name=?",
+                                (max(0, min(100, int(affinity))), time.time(), str(name)))
+
+    def set_npc_event(self, name, text):
+        return self.store.write("UPDATE npc_relations SET last_event=?, updated_at=? WHERE name=?",
+                                (str(text)[:120], time.time(), str(name)))
+
+    def add_receivable(self, npc, amount_cents, due_day=""):
+        return self.store.write("INSERT INTO receivables(npc, amount_cents, due_day, status, created_at) "
+                                "VALUES(?,?,?,'open',?)", (str(npc), int(amount_cents), str(due_day), time.time()))
+
+    def receivables(self, status="open"):
+        return self._rows("SELECT * FROM receivables WHERE status=? ORDER BY id", (str(status),))
+
+    def settle_receivable(self, rid, status):
+        return self.store.write("UPDATE receivables SET status=? WHERE id=?", (str(status), int(rid)))
+
+    def task_done(self, task_id):
+        return bool(self._rows("SELECT 1 FROM tasks WHERE task_id=? LIMIT 1", (str(task_id),)))
+
+    def mark_task(self, task_id, note=""):
+        return self.store.write("INSERT OR IGNORE INTO tasks(task_id, done_at, note) VALUES(?,?,?)",
+                                (str(task_id), time.time(), str(note)))
 
     def add_salary_item(self, period, kind, label, amount_cents):
         return self.store.write(

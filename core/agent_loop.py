@@ -52,6 +52,25 @@ class FinanceDecision:
 
     async def _refresh(self, codes):
         quotes = await self.runtime.run_io(fetch_quotes, list(codes), timeout=12) or {}
+        # 收盘价快照（每天一次）：赌徒补仓要看“连跌 3 天”
+        try:
+            today = _dt.date.today().isoformat()
+            for code, quote in (quotes or {}).items():
+                price = quote.get("price") if isinstance(quote, dict) else None
+                if not price:
+                    continue
+                key = "hist_day:%s:%s" % (code, today)
+                if self.repo.meta_get(key):
+                    continue
+                self.repo.meta_set(key, "1")
+                try:
+                    hist = json.loads(self.repo.meta_get("hist:" + code) or "[]")
+                except Exception:
+                    hist = []
+                hist.append(round(float(price), 3))
+                self.repo.meta_set("hist:" + code, json.dumps(hist[-5:]))
+        except Exception as exc:
+            isolated("finance.hist", exc)
         for row in self.repo.positions():
             quote = quotes.get(str(row.get("code")))
             if quote and quote.get("price"):
@@ -150,6 +169,12 @@ class FinanceDecision:
                     codes.append(code)
         cash = self.finance.balance_cents() or 0
         mood = self.finance.mood()
+        try:
+            gamble = getattr(self.plugin, "gamble", None)
+            if gamble is not None:
+                await gamble.maybe_gamble(quotes, positions, mood.get("word"), now)
+        except Exception as exc:
+            isolated("finance.gamble", exc)
         decision = None
         try:
             from .llm_decider import llm_decide
@@ -201,8 +226,60 @@ class FinanceDecision:
             tm = getattr(self.plugin, "finance_memory", None)
             if tm is not None:
                 memory_text = tm.context_text([p["code"] for p in positions] + list(allowed), limit=18)
+            bank_line = ""
+            try:
+                bank = getattr(self.plugin, "bank", None)
+                if bank is None:
+                    from ..services.bank_engine import build_bank
+                    bank = build_bank(self.plugin)
+                    self.plugin.bank = bank
+                if bank is not None:
+                    bank_line = bank.prompt_line()
+                    ins = getattr(self.plugin, "insurance", None)
+                    if ins is not None:
+                        bank_line += chr(10) + ins.prompt_line()
+                        try:
+                            repo = self.repo
+                            idle = int(self.finance.balance_cents() or 0)
+                            has_car = bool(repo.assets_of('car')) if hasattr(repo, 'assets_of') else False
+                            has_house = bool(repo.assets_of('house')) if hasattr(repo, 'assets_of') else False
+                            health = 80
+                            try:
+                                med = getattr(self.plugin, "medical", None)
+                                if med is not None:
+                                    snap = med.health_snapshot()
+                                    health = (60 if snap["severity"] >= 2 else 85)
+                            except Exception as exc3:
+                                isolated("insurance.health", exc3)
+                            news = str(repo.meta_get("news_text_today") or "")
+                            asset = str(repo.meta_get("new_asset_event") or "")
+                            if asset:
+                                repo.meta_set("new_asset_event", "")
+                            hint = ins.decision_hint(health=health, news=news, idle_cents=idle, has_car=has_car, has_house=has_house)
+                            extra = []
+                            if health < 60:
+                                extra.append("当前健康值：%d（偏低）" % health)
+                            for w in ("猝死", "重疾", "流感", "交通事故", "火灾", "漏水"):
+                                if w in news:
+                                    extra.append("近期新闻包含「%s」" % w)
+                                    break
+                            if asset == "car":
+                                extra.append("你昨天刚买了新车，建议买交强险/商业车险")
+                            if asset == "house":
+                                extra.append("你昨天刚买了新房，建议买家财险")
+                            if extra:
+                                hint = "【今日风险提示】" + "；".join(extra) + ("。" + hint.replace("【保险购买建议】", "") if hint else "")
+                            if hint and str(repo.meta_get("last_insurance_check_date") or "") == now.date().isoformat():
+                                hint = ""
+                            repo.meta_set("last_insurance_check_date", now.date().isoformat())
+                            if hint:
+                                bank_line += chr(10) + hint
+                        except Exception as exc2:
+                            isolated('finance.insurance.hint', exc2)
+            except Exception as exc:
+                isolated("finance.bank.prompt", exc)
             decision = await llm_decide(self.plugin, cash, positions, quotes, mood.get("word"), allowed,
-                                        news_text, memory_text)
+                                        news_text, (memory_text + "\n" + bank_line).strip())
         if not decision:
             decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
                                    random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
@@ -218,6 +295,20 @@ class FinanceDecision:
 
     async def _execute(self, slot, decision, now):
         idem = "decision:%s:%s" % (now.date().isoformat(), slot)
+        if decision.get("action") == "deposit":
+            try:
+                from ..services.bank_engine import build_bank
+            except ImportError:
+                from services.bank_engine import build_bank
+            bank = getattr(self.plugin, "bank", None) or build_bank(self.plugin)
+            self.plugin.bank = bank
+            amount = int(decision.get("amount_cents") or 0)
+            term = int(decision.get("term_months") or 0)
+            out = await bank.deposit(amount, term)
+            if out.get("ok"):
+                label = "活期" if not term else "定期%d个月" % term
+                return {"ok": True, "message": "存了 %.2f 元%s" % (amount / 100.0, label)}
+            return {"ok": False, "message": "存款没成功（%s）" % (out.get("reason") or "unknown")}
         if decision["action"] == "buy" and decision.get("code"):
             return await self.trading.buy(decision["code"], decision.get("qty", 100), None, idem + ":buy")
         if decision["action"] == "sell" and decision.get("code") and decision.get("qty"):
@@ -252,6 +343,18 @@ class FinanceDecision:
             isolated("finance.decision.diary", exc)
 
     async def _low_fund(self, state, now):
+        try:
+            bank = getattr(self.plugin, "bank", None)
+            if bank is None:
+                from ..services.bank_engine import build_bank
+                bank = build_bank(self.plugin)
+                self.plugin.bank = bank
+            if bank is not None:
+                liquid = await bank.emergency_liquidate(state.get("need_cents") or 50000)
+                if liquid.get("ok") and liquid.get("from") != "cash":
+                    return
+        except Exception as exc:
+            isolated("finance.bank.emergency", exc)
         day = now.date().isoformat()
         if self.repo.meta_get("low_fund_alert") == day:
             return
@@ -291,5 +394,15 @@ class FinanceDecision:
                           "price": "%.2f" % (last / 100.0), "pnl_cents": pnl,
                           "pnl_pct": (pnl / base) if base else 0.0})
         await self.finance.record_daily_pnl(items, total, idem="close:" + day)
+        try:
+            cash = int(self.finance.balance_cents() or 0)
+            asset = cash + sum(int(r.get("cost_cents") or 0) * float(r.get("qty") or 0)
+                               for r in self.repo.positions())
+            if total < 0 and abs(total) > 0.10 * max(asset, 1):
+                amo = self.finance._amo() if hasattr(self.finance, "_amo") else None
+                if amo is not None and hasattr(amo, "on_big_stock_loss"):
+                    amo.on_big_stock_loss()
+        except Exception:
+            pass
         self.repo.meta_set(flag, "1")
         return {"ok": True, "total_pnl": total / 100.0, "items": len(items)}

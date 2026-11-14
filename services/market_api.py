@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import time
 import urllib.request
 
 try:
@@ -57,11 +58,16 @@ def fetch_quotes(codes):
         else:
             symbols.append("sh" + code)
     url = QUOTE_URL % ",".join(symbols)
-    try:
-        request = urllib.request.Request(url, headers={"User-Agent": _UA})
-        with urllib.request.urlopen(request, timeout=8) as response:
-            text = response.read().decode("gbk", "ignore")
-    except Exception as exc:
-        isolated("finance.market.fetch", exc)
-        return {}
-    return parse_quotes(text)
+    last_exc = None
+    for attempt in range(2):  # 弱网只重试一次：失败就降级，不拖住聊天
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": _UA})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                text = response.read().decode("gbk", "ignore")
+            return parse_quotes(text)
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                time.sleep(0.2)
+    isolated("finance.market.fetch", last_exc)
+    return {}

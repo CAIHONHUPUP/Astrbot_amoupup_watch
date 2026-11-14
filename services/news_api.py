@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -18,9 +19,20 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Sa
 
 
 def _get(url, timeout=8):
-    request = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.eastmoney.com/"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", "ignore")
+    """GET 文本；弱网只重试一次，仍失败就抛给调用方降级。"""
+    last_exc = None
+    for attempt in range(2):
+        request = urllib.request.Request(
+            url, headers={"User-Agent": UA, "Referer": "https://www.eastmoney.com/"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8", "ignore")
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                time.sleep(0.2)
+    raise last_exc
 
 
 def strip_jsonp(text):

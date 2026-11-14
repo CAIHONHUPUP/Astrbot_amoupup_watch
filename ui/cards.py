@@ -195,6 +195,26 @@ class CardMixin:
         }
 
     def _finance_snapshot(self, demo: bool = False) -> dict:
+        view = self._finance_snapshot_raw(demo)
+        try:
+            bank = getattr(self, "bank", None)
+            if bank is None:
+                try:
+                    from ..services.bank_engine import build_bank
+                except ImportError:
+                    from services.bank_engine import build_bank
+                bank = build_bank(self)
+                self.bank = bank
+            if isinstance(view, dict) and bank is not None:
+                cur, fix = int(bank.current_cents()), int(bank.fixed_cents())
+                view["bank"] = {"current_cents": cur, "fixed_cents": fix}
+                if "total_cents" in view:
+                    view["total_cents"] = int(view.get("total_cents") or 0) + cur + fix
+        except Exception as exc:
+            isolated("finance.bank.snapshot", exc)
+        return view
+
+    def _finance_snapshot_raw(self, demo: bool = False) -> dict:
         """金融概览：优先问金融插件，没有就回退空态（契约见 docs/INTEGRATION-MAP.md）。"""
         if not demo:
             provider = self._finance_provider()

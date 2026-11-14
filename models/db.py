@@ -36,6 +36,31 @@ CREATE TABLE IF NOT EXISTS events (
     created_at REAL NOT NULL, gen TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_day ON events(day, id);
+CREATE TABLE IF NOT EXISTS npc_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    circle TEXT NOT NULL DEFAULT 'friend',
+    relation TEXT NOT NULL DEFAULT '',
+    affinity INTEGER NOT NULL DEFAULT 50,
+    money_owed INTEGER NOT NULL DEFAULT 0,
+    borrowed_from_her INTEGER NOT NULL DEFAULT 0,
+    tags TEXT NOT NULL DEFAULT '',
+    last_event TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS receivables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    npc TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    due_day TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    done_at REAL NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS people (
     pid TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '', weight REAL NOT NULL DEFAULT 0,

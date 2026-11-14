@@ -14,8 +14,10 @@ import time
 
 try:
     from ..guard import isolated
+    from ..utils.helpers import stable_int, yuan
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
+    from utils.helpers import stable_int, yuan
 
 LOW_RATIO = 0.05
 LOAN_RATE_RANGE = (0.03, 0.18)

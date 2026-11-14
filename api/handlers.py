@@ -24,6 +24,18 @@ class ApiMixin:
             isolated("web.finance_demo", exc)
             return {"status": "error", "message": "demo failed"}
 
+    async def _api_ledger(self, request=None):
+        """GET 明细流水：每一笔带 大类/小类/物品/原因/时间。"""
+        try:
+            finance = getattr(self, "finance", None)
+            amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+            if amo is None:
+                return {"ok": False, "message": "钱包未就绪"}
+            return {"ok": True, "items": amo.wallet.ledger(80)}
+        except Exception as exc:
+            isolated("web.ledger", exc)
+            return {"ok": False, "message": "流水读取失败"}
+
     async def _api_finance(self, request=None):
         try:
             demo = False
@@ -53,30 +65,178 @@ class ApiMixin:
             isolated("web.body", exc)
         return {}
 
-    async def _api_trade(self, request=None):
+    async def _api_bank(self, request=None):
+        """GET 活期/定期明细；POST {action:deposit|withdraw, amount_cents, term}。"""
         try:
             body = await self._read_json()
-            action = str(body.get("action") or "").lower()
-            code = str(body.get("code") or "").strip()
-            qty = body.get("qty") or 0
-            price = body.get("price") or None
-            idem = str(body.get("idem") or "")
-            trading = self.trading
-            if trading is None:
-                return {"ok": False, "message": "交易模块未就绪"}
-            if action == "buy":
-                return await trading.buy(code, qty, price, idem)
-            if action == "sell":
-                return await trading.sell(code, qty, price, idem)
-            if action == "subscribe":
-                amount_cents = int(round(float(body.get("qty") or body.get("amount") or 0) * 100))
-                return await trading.subscribe(code, amount_cents, price, idem)
-            if action == "redeem":
-                return await trading.redeem(code, qty, price, idem)
-            return {"ok": False, "message": "未知操作"}
+            bank = getattr(self, "bank", None)
+            if bank is None:
+                try:
+                    from ..services.bank_engine import build_bank
+                except ImportError:
+                    from services.bank_engine import build_bank
+                bank = build_bank(self)
+                self.bank = bank
+            if not body:
+                return {"ok": True, "current_cents": bank.current_cents(),
+                        "fixed": bank.active_fixed_rows(), "fixed_cents": bank.fixed_cents(),
+                        "last_matured": bank.last_matured(),
+                        "total_cents": bank.total_cents()}
+            action = str(body.get("action") or "deposit")
+            amount = int(body.get("amount_cents") or 0)
+            term = int(body.get("term") or 0)
+            if action == "settle_matured":
+                return {"ok": True, "matured": await bank.process_matured_fixed_deposits()}
+            if action == "deposit":
+                return await bank.deposit(amount, term)
+            return await bank.withdraw(amount, None if not term else 0)
         except Exception as exc:
-            isolated("web.trade", exc)
-            return {"ok": False, "message": "交易失败：%s" % exc}
+            isolated("web.bank", exc)
+            return {"ok": False, "message": "银行接口异常"}
+
+    async def _api_social(self, request=None):
+        """GET 核心关系/应收；POST {action:"event", name:"随礼"} 触发一次社交事件。"""
+        try:
+            social = getattr(self, "social", None)
+            if social is None:
+                try:
+                    from ..services.social_engine import build_social
+                except ImportError:
+                    from services.social_engine import build_social
+                social = build_social(self)
+                self.social = social
+            social.ensure_seed()
+            if not await self._read_json():
+                rows = social.repo.npcs()
+                try:
+                    try:
+                        from ..services.gift_engine import birthday_info
+                    except ImportError:
+                        from services.gift_engine import birthday_info
+                    for row in rows:
+                        info = birthday_info(self, str((row or {}).get("name") or ""))
+                        row["birthday"] = info.get("birthday")
+                        row["birthday_text"] = info.get("text")
+                except Exception:
+                    pass
+                recv = social.repo.receivables()
+                return {"ok": True, "npcs": rows, "receivables": recv,
+                        "line": social.relation_line()}
+            body = await self._read_json()
+            name = str(body.get("name") or "随礼")
+            table = {"随礼": social.gift_money, "红包": social.red_packet,
+                     "聚餐": social.dinner, "借钱": social.borrow_request, "批评": social.criticism}
+            fn = table.get(name)
+            if fn is None:
+                return {"ok": False, "message": "未知事件"}
+            return {"ok": True, "result": await fn()}
+        except Exception as exc:
+            isolated("web.social", exc)
+            return {"ok": False, "message": "社交接口异常"}
+
+    async def _api_insurance(self, request=None):
+        """GET 保单列表；POST {kind:"critical|medical"} 购买（年费扣款，幂等）。"""
+        try:
+            body = await self._read_json()
+            medical = getattr(self, "medical", None)
+            if medical is None:
+                return {"ok": False, "message": "医疗模块未就绪"}
+            try:
+                from ..services.insurance_engine import PRODUCTS, build_insurance
+            except ImportError:
+                from services.insurance_engine import PRODUCTS, build_insurance
+            ins = getattr(self, "insurance", None) or build_insurance(self)
+            self.insurance = ins
+            if body.get("kind"):
+                return await ins.buy(body["kind"])
+            st = ins.status()
+            repo = getattr(self, "finance_repo", None)
+            def owned(kind):
+                try:
+                    return bool(repo.assets_of(kind)) if repo else False
+                except Exception:
+                    return False
+            has_car, has_house = owned("car"), owned("house")
+            def line(key):
+                spec = PRODUCTS[key]; row = st.get(key) or {}
+                if row.get("expired") or row.get("lapsed"):
+                    status = "已失效（断缴）"
+                elif row.get("grace"):
+                    status = "宽限期（至 %s）" % row.get("grace_until")
+                elif row.get("active"):
+                    status = "生效中" + (("（下次缴费：%s 年）" % (int(row["year"]) + 1)) if row.get("year") else "")
+                else:
+                    status = "未购买"
+                if spec.get("kind") == "car" and not has_car: status = "无车不适用"
+                if spec.get("kind") == "house" and not has_house: status = "无房不适用"
+                return {"name": spec["name"], "status": status}
+            groups = [{"title": "人身保险", "items": [line(k) for k in ("e生保", "金钟罩", "重疾")]},
+                      {"title": "财产保险", "items": [line(k) for k in ("交强险", "商车险", "家财险")]}]
+            return {"ok": True, "groups": groups, "hint": "发送 /督促她买保险 <险种> 可以为她提供保障",
+                    "policies": st, "has_policy": bool(st),
+                    "catalog": [{"kind": k, "name": v["name"],
+                                 "premium_cents": v["premium"][0]} for k, v in PRODUCTS.items()]}
+            return {"ok": True, "policies": medical.policies(),
+                    "catalog": [{"kind": "critical", "name": "重疾险", "premium_cents": medical.PREMIUM["critical"]},
+                                {"kind": "medical", "name": "医疗险", "premium_cents": medical.PREMIUM["medical"]}],
+                    "has_policy": medical.has_policy("critical")}
+        except Exception as exc:
+            isolated("web.insurance", exc)
+            return {"ok": False, "message": "保险接口异常"}
+
+    async def _api_fortune(self, request=None):
+        try:
+            fortune = getattr(self, "fortune", None)
+            if fortune is None:
+                return {"ok": False, "message": "突发引擎未就绪"}
+            return await fortune.monthly_roll()
+        except Exception as exc:
+            isolated("web.fortune", exc)
+            return {"ok": False, "message": "突发事件接口异常"}
+
+    async def _api_lending(self, request=None):
+        try:
+            body = await self._read_json()
+            lending = getattr(self, "lending", None)
+            if lending is None:
+                return {"ok": False, "message": "人情债模块未就绪"}
+            if body.get("friend"):
+                return await lending.lend(body["friend"], int(body.get("amount_cents") or 0),
+                                          int(body.get("months") or 6))
+            return await lending.repay_tick()
+        except Exception as exc:
+            isolated("web.lending", exc)
+            return {"ok": False, "message": "人情债接口异常"}
+
+    async def _api_medical(self, request=None):
+        """GET 看病历/生病状态；POST {level,name,days,event_id} 模拟一场病（走同一入口）。"""
+        try:
+            body = await self._read_json()
+            medical = getattr(self, "medical", None)
+            if medical is None:
+                return {"ok": False, "message": "医疗模块未就绪"}
+            if not body:
+                hunger = {}
+                try:
+                    finance = getattr(self, "finance", None)
+                    amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+                    if amo is not None and hasattr(amo, "hunger_state"):
+                        hunger = amo.hunger_state()
+                except Exception:
+                    hunger = {}
+                return {"ok": True, "is_sick": medical.is_sick(), "last_checkup": self.finance_repo.meta_get("checkup:last", "") if self.finance_repo else "", "last_hp": self.finance_repo.meta_get("checkup:last_hp", "") if self.finance_repo else "",
+                        "in_bed_rest": medical.in_bed_rest(),
+                        "hunger": hunger,
+                        "sick_until": self.finance_repo.meta_get("is_sick_until", "") if self.finance_repo else ""}
+            if str(body.get("action") or "") == "checkup":
+                return await medical.checkup()
+            result = await medical.handle_sick_event(
+                body.get("level", "light"), body.get("name", "感冒"),
+                body.get("days", 1), body.get("event_id", ""))
+            return {"ok": bool(result.get("ok")), **result}
+        except Exception as exc:
+            isolated("web.medical", exc)
+            return {"ok": False, "message": "系统扣款异常，但身体重要，请先休息。"}
 
     async def _api_city(self, request=None):
         """GET 看当前城市；POST {city:"东莞"} 搬家（同步 amo 面板城市与天气）。"""

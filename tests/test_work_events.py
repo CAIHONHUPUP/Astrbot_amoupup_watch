@@ -78,7 +78,7 @@ def test_late_deducts_50_and_runs_pipeline():
     repo, fin, sal, eng = make()
     result = asyncio.run(eng.fire("late", day=dt.date(2026, 11, 13)))
     assert result["ok"] and result["amount_cents"] == -5000
-    assert result["card"] == "[迟到/早退] -¥50.00"
+    assert result["card"] == "[迟到] -¥50.00"
     assert sal.items_rows[-1]["amount_cents"] == -5000
     assert fin.schedules[0]["activity"].startswith("迟到/早退")
     assert "迟到" in fin.memories[0] and "50.00" in fin.memories[0]
@@ -91,7 +91,7 @@ def test_late_deducts_50_and_runs_pipeline():
 def test_project_bonus_in_range_and_happy():
     repo, fin, sal, eng = make()
     result = asyncio.run(eng.fire("project", day=dt.date(2026, 11, 13)))
-    assert 50000 <= result["amount_cents"] <= 100000
+    assert 20000 <= result["amount_cents"] <= 50000
     assert "奖金" in result["diary"]
     assert any("开心" in d for d in fin.moods)
 
@@ -155,3 +155,20 @@ def test_daily_random_is_once_per_day_and_skips_weekend():
     second = asyncio.run(eng.daily_random(monday))
     assert second is None
     assert repo.meta_get("work_random:2026-11-16") == "1"
+
+def test_random_events_only_roll_in_the_morning():
+    repo, fin, sal, eng = make()
+    # 凌晨不掷（不写 flag），早上才掷
+    assert asyncio.run(eng.daily_random(dt.datetime(2026, 11, 13, 3, 0))) is None
+    assert repo.meta_get("work_random:2026-11-13") is None
+    result = asyncio.run(eng.daily_random(dt.datetime(2026, 11, 13, 8, 0)))
+    assert repo.meta_get("work_random:2026-11-13")
+
+
+def test_event_mood_words_and_diary_texts():
+    repo, fin, sal, eng = make()
+    late = asyncio.run(eng.fire("late", day=dt.date(2026, 11, 13)))
+    assert late["diary"].startswith("早上又迟到")
+    assert eng.today_events("2026-11-13")[0]["mood_word"] == "低落"
+    proj = asyncio.run(eng.fire("project", day=dt.date(2026, 11, 13)))
+    assert "奖金" in proj["diary"] and eng.today_events("2026-11-13")[1]["mood_word"] == "狂喜"
