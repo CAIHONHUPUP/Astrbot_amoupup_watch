@@ -283,7 +283,7 @@ class CardMixin:
         tasks = data.get("tasks") or {}
         lag = data.get("lag") or {}
         lines = [
-            "[%s] %s gen=%s status=%s" % (data.get("display_name", DISPLAY_NAME),
+            "[%s] %s gen=%s status=%s" % (data.get("display_name") or "我能永远守护你",
                                           data.get("version", "?"), data.get("generation", "?"),
                                           data.get("status", "?")),
             "任务 %s 个: %s" % (tasks.get("count", 0), ",".join(tasks.get("names", [])) or "-"),

@@ -26,6 +26,15 @@ async def handle_transfer(plugin, text):
     message = result.get("message") or "已收到"
     if result.get("ok"):
         try:
+            amo = getattr(plugin, "amo", None)
+            finance = getattr(plugin, "finance", None)
+            if amo is None and finance is not None and hasattr(finance, "_amo"):
+                amo = finance._amo()
+            if amo is not None and hasattr(amo, "note_transfer_event"):
+                amo.note_transfer_event(cents)
+        except Exception:
+            pass
+        try:
             from .city import settle_pending_fee
         except ImportError:
             from services.city import settle_pending_fee

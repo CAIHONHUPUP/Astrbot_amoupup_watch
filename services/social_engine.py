@@ -168,10 +168,20 @@ class SocialEngine:
                 ready = True
         roll_key = "social:roll:" + day
         if ready and not self.repo.task_done(roll_key):
-            pick = stable_int("social-pick:" + day, 0, 3)
-            out["events"].append(await [self.gift_money, self.dinner, self.borrow_request][pick]())
-            self.repo.meta_set("social:last_day", day)
-            self.repo.mark_task(roll_key, "roll")
+            try:
+                mood_word = str(self.finance.mood().get("word") or "")
+                cash = int(self.finance.balance_cents() or 0)
+            except Exception:
+                mood_word, cash = "", 0
+            low = any(word in mood_word for word in ("崩溃", "抑郁", "低落", "难过", "委屈"))
+            if low or cash < 50000 or stable_int("social-gate:" + day, 0, 100) < 35:
+                self.repo.meta_set("social:last_day", day)
+                out["skipped"] = "state"
+            else:
+                pick = stable_int("social:pick:" + day, 0, 3)
+                out["events"].append(await [self.gift_money, self.dinner, self.borrow_request][pick]())
+                self.repo.meta_set("social:last_day", day)
+                self.repo.mark_task(roll_key, "roll")
         await self.repay_tick(now)
         # 收尾：每年 3 月 1 日自动体检
         med = getattr(self.plugin, "medical", None)

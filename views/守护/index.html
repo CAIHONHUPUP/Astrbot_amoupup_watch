@@ -105,6 +105,21 @@
   input, select { width:100%; border:1px solid var(--line); border-radius:11px; padding:8px 11px; font-size:13px; background:var(--card); color:var(--text); font-family:inherit; }
   input:focus, select:focus { outline:none; border-color:#9fd7f6; box-shadow:0 0 0 3px rgba(14,165,233,.10); }
   .sheet-foot { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+  .house-current { border:1px solid #cfeafb; background:linear-gradient(180deg,#f6fcff,#eef8ff); border-radius:14px; padding:12px 14px; }
+  .house-current .house-line { font-size:13px; margin-top:4px; color:var(--muted); }
+  .house-current strong { color:var(--text); }
+  .house-gallery { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+  .house-gallery img { width:100%; aspect-ratio:1; object-fit:cover; border-radius:12px; border:1px solid var(--line); background:#fff; }
+  .house-gallery .house-empty { grid-column:1 / -1; font-size:12px; color:var(--muted); padding:10px; text-align:center; border:1px dashed var(--line); border-radius:12px; }
+  .house-list { display:flex; flex-direction:column; gap:8px; }
+  .house-item { display:flex; gap:10px; align-items:center; border:1px solid var(--line); border-radius:14px; padding:9px 10px; background:var(--soft); }
+  .house-item img, .house-ph { width:68px; height:68px; flex:0 0 68px; border-radius:10px; border:1px solid var(--line); object-fit:cover; background:#fff; }
+  .house-ph { display:flex; align-items:center; justify-content:center; font-size:10px; color:var(--muted); text-align:center; padding:4px; }
+  .house-meta { min-width:0; flex:1; }
+  .house-meta .house-name { font-size:13.5px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .house-meta .sub { margin-top:3px; white-space:normal; }
+  .house-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; align-items:center; }
+  .house-actions button { padding:5px 8px; font-size:12px; border-radius:8px; min-height:0; }
   .brief { border:1px solid #cfeafb; background:linear-gradient(180deg,#f6fcff,#eef8ff); border-radius:14px; padding:12px 14px; font-size:13px; line-height:1.7; white-space:pre-wrap; display:none; }
   .brief.show { display:block; }
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:#0f172a; color:#fff;
@@ -133,7 +148,8 @@
   <button data-tab="finance" class="active">金融</button>
   <button data-tab="social">社会</button>
   <button data-tab="medical">医疗</button>
-  <button data-tab="status">状态</button>
+  <button data-tab="housing">房屋</button>
+    <button data-tab="status">状态</button>
 </nav>
 
 <main>
@@ -268,6 +284,19 @@
     </div>
   </section>
 
+  <section class="panel" id="tab-housing">
+    <div class="card">
+      <div class="card-h"><h2>房屋</h2><span class="tag" id="houseStatusTag">—</span>
+        <button class="ghost" id="houseRefresh" style="margin-left:auto">刷新</button>
+      </div>
+      <div id="houseCurrent" class="house-current">加载中…</div>
+      <div id="houseGallery" class="house-gallery"></div>
+      <div class="card-h" style="margin-top:14px"><h2>名下房产</h2><span class="tag" id="houseCount">—</span></div>
+      <div id="houseList" class="house-list"></div>
+      <div id="houseRentText" class="sub" style="margin-top:8px"></div>
+    </div>
+  </section>
+
   <section class="panel" id="tab-status">
     <div class="card">
       <div class="card-h"><h2>运行状态</h2><span class="tag">实时</span>
@@ -397,6 +426,7 @@
     nav.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b === btn); });
     document.querySelectorAll(".panel").forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + btn.dataset.tab); });
     if (btn.dataset.tab === "status") refreshStatus();
+    if (btn.dataset.tab === "housing") loadHousing();
     if (btn.dataset.tab === "finance") loadFinance();
   });
 
@@ -874,6 +904,72 @@
     if (card) card.classList.add("open");   // 折叠状态下先展开，否则看不到简报
     showBrief();
   });
+  // ---------- housing（资产/状态由守护展示，房间数据来自能陪） ----------
+  function houseMoney(cents) {
+    var n = Number(cents || 0) / 100;
+    return (Math.round(n * 100) / 100).toLocaleString("zh-CN") + " 元";
+  }
+  function houseKind(h) { return h && h.kind === "own" ? "已购房" : "租房"; }
+  function houseStatus(h) {
+    if (!h) return "—";
+    if (h.is_current) return "当前居住";
+    var map = { living: "自住中", idle: "闲置", rented_out: "已出租", expired: "已退租" };
+    return map[h.status] || h.status || "闲置";
+  }
+  function houseToast(text) {
+    try { toast(text); } catch (e) { alert(text); }
+  }
+  function renderHousing(d) {
+    var cur = d.current || {};
+    var homes = d.homes || [];
+    var own = cur.kind === "own";
+    var tag = q("houseStatusTag");
+    if (tag) tag.textContent = own ? "当前居住：自己买的温馨小家" : "当前居住：合租单间";
+    var currentBox = q("houseCurrent");
+    if (currentBox) {
+      currentBox.innerHTML = "<strong>" + esc(cur.name || "家") + "</strong>" +
+        "<div class=\"house-line\">" + (own ? "自己买的房子，不用再交房租" : "租住中 · 月租 " + houseMoney(cur.rent_cents)) +
+        " · " + esc(cur.style || "简约风") + " · " + esc(cur.colors || "米白色") + "</div>" +
+        "<div class=\"house-line\">家具：" + esc((cur.furniture || []).join("、") || "（空）") + "</div>";
+    }
+    var gallery = q("houseGallery");
+    if (gallery) {
+      var imgs = cur.images || {};
+      var html = "";
+      if (imgs.living) html += "<img src=\"" + imgs.living + "\" alt=\"客厅\">";
+      if (imgs.bedroom) html += "<img src=\"" + imgs.bedroom + "\" alt=\"卧室\">";
+      gallery.innerHTML = html || "<div class=\"house-empty\">场景图生成中，旧图会保留；稍后点刷新查看</div>";
+    }
+    var count = q("houseCount");
+    if (count) count.textContent = homes.length + " 套";
+    var list = q("houseList");
+    if (list) {
+      list.innerHTML = homes.map(function (h) {
+        var img = (h.images && (h.images.living || h.images.bedroom)) || "";
+        var thumb = img ? "<img src=\"" + img + "\" alt=\"\">" : "<div class=\"house-ph\">暂无<br>场景图</div>";
+        var rent = h.kind === "own" ? "" : " · 月租 " + houseMoney(h.rent_cents);
+        return "<div class=\"house-item\">" + thumb +
+          "<div class=\"house-meta\"><div class=\"house-name\">" + esc(h.name) + "</div>" +
+          "<div class=\"sub\">" + houseKind(h) + " · " + houseStatus(h) + rent + "</div>" +
+          "<div class=\"sub\">" + esc(h.style || "简约风") + " · " + esc(h.colors || "米白色") + "</div></div></div>";
+      }).join("") || "<div class=\"sub\">名下暂无房产</div>";
+    }
+    var rentText = q("houseRentText");
+    if (rentText) rentText.textContent = own ? "目前未产生租房支出。" : (d.rent || "");
+  }
+  async function loadHousing() {
+    try {
+      var data = await apiGet("housing");
+      if (!data || data.ok === false) throw new Error((data && data.message) || "房屋数据为空");
+      renderHousing(data);
+    } catch (error) {
+      var currentBox = q("houseCurrent");
+      if (currentBox) currentBox.textContent = "房屋读取失败：" + (error && error.message ? error.message : "接口未就绪");
+    }
+  }
+  var houseRefresh = q("houseRefresh");
+  if (houseRefresh) houseRefresh.addEventListener("click", function () { loadHousing(); });
+
   // ---------- status ----------
   function set(id, v) { var el = q(id); if (el) el.textContent = v; }
   function refreshStatus() {

@@ -285,6 +285,9 @@ class FinanceLife:
         if self._has("house"):
             self.repo.mark_settled(period, "rent", "has_house")
             return "has_house"
+        cfg = getattr(getattr(self, "plugin", None), "cfg_bool", None)
+        if callable(cfg) and not cfg("bill_autopay", True):
+            return "bill_deferred"
         amount = self.rent_cents(period)
         result = await self.finance.expense(amount, "房租", "rent:" + period, necessary=True)
         if not result.get("ok"):
@@ -296,6 +299,9 @@ class FinanceLife:
         """水 / 电 / 燃气 / 宽带 逐项扣；任何一项失败就停在那项，先预警再进 5% 流程。"""
         if now.day < 1:
             return "skip"
+        cfg = getattr(getattr(self, "plugin", None), "cfg_bool", None)
+        if callable(cfg) and not cfg("bill_autopay", True):
+            return "bill_deferred"
         summer = now.month in (6, 7, 8, 9)
         factor = factor_of(current_city(getattr(self, "plugin", None)))
         plan = (

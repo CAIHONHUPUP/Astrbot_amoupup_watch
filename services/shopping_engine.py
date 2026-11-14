@@ -238,6 +238,17 @@ async def handle_reply(plugin, text, now=None):
         if not isinstance(res, dict) or not res.get("ok"):
             return {"ok": False, "reason": "expense"}
         try:
+            if hasattr(amo, "note_purchase"):
+                amo.note_purchase(pending.get("name"), buy)
+        except Exception:
+            pass
+        try:
+            hook = getattr(finance, "furniture_bought", None)
+            if callable(hook):
+                hook(pending.get("name"))
+        except Exception:
+            pass
+        try:
             amo.add_closet_item({"name": pending.get("name"), "color": pending.get("color"),
                                  "category": pending.get("category"), "time_slot": pending.get("time_slot"),
                                  "price": buy // 100})

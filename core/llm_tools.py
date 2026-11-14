@@ -114,6 +114,60 @@ async def buy_gift_tool(plugin, target_name="", gift_name="", price=0.0):
     return "买好啦：%s 的%s，花了 %d 元。" % (target, gift, cents // 100)
 
 
+def _housing_of(plugin):
+    finance = getattr(plugin, "finance", None)
+    amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+    return getattr(amo, "housing", None) if amo is not None else None
+
+
+def _pick_home(housing, ref="", only_idle=False):
+    raw = getattr(housing, "homes", [])
+    homes = list(raw() if callable(raw) else raw or [])
+    ref = str(ref or "").strip()
+    if ref:
+        for home in homes:
+            if str(home.get("id")) == ref or str(home.get("name") or "").strip() == ref:
+                return home
+        return None
+    current = str((housing.current() or {}).get("id") or "")
+    for home in homes:
+        if home.get("kind") != "own":
+            continue
+        if only_idle and (home.get("id") == current or home.get("status") == "rented_out"):
+            continue
+        return home
+    return None
+
+
+async def rent_out_property_tool(plugin, property_name="", rent=0.0):
+    """她自主决定把闲置自有房出租；不传名字时挑一套空置的。"""
+    housing = _housing_of(plugin)
+    if housing is None:
+        return "房屋模块未就绪。"
+    home = _pick_home(housing, property_name, only_idle=True)
+    if home is None:
+        return "没有可出租的闲置自有房产。"
+    try:
+        cents = int(round(float(rent or 0) * 100))
+    except (TypeError, ValueError):
+        cents = 0
+    cents = cents or int(home.get("rent_cents") or 150000)
+    ok, message = housing.rent_out(home.get("id"), cents)
+    return message if ok else ("没租出去：%s" % message)
+
+
+async def sell_property_tool(plugin, property_name=""):
+    """她自主决定出售闲置房产；不传名字时只挑非当前居住的自有房。"""
+    housing = _housing_of(plugin)
+    if housing is None:
+        return "房屋模块未就绪。"
+    home = _pick_home(housing, property_name, only_idle=True)
+    if home is None:
+        return "没有可出售的闲置自有房产；如果真要卖当前住处，请说出具体房产名。"
+    ok, message = housing.sell_home(home.get("id"))
+    return message if ok else ("没卖成：%s" % message)
+
+
 async def propose_date_tool(plugin, activity="", time=""):
     """答应老公的约会提议：写进日程，返回开心的回复。"""
     activity = str(activity or "").strip() or "吃火锅"
@@ -128,3 +182,20 @@ async def propose_date_tool(plugin, activity="", time=""):
     if not out.get("ok"):
         return out.get("message") or "我们不是已经约好了吗？我记着呢！"
     return "好呀好呀！我这就准备出门，%s见！" % (raw or "等会儿")
+
+
+async def confirm_arrival_tool(plugin, activity_name=""):
+    """等待赴约时确认老公到达：立刻进入 dating，并说见面的话。"""
+    try:
+        from .services.date_engine import active_date, attend_date, find_pending
+    except ImportError:
+        from services.date_engine import active_date, attend_date, find_pending
+    if active_date(plugin):
+        return "你们已经在一起啦，牵着我进去吧~"
+    pending = find_pending(plugin, activity_name)
+    if pending is None:
+        return "现在没有在等你赴约呀。"
+    out = await attend_date(plugin, pending.get("title"))
+    if not out.get("ok"):
+        return out.get("message") or "约会没开始成……"
+    return "你终于来啦！我在这儿呢~（挽住你的胳膊）我们快进去吧！"

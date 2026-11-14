@@ -1,0 +1,14 @@
+[run]
+source = .
+omit =
+    tests/*
+    tools/*
+    __pycache__/*
+    _test_tmp/*
+    test_*.py
+
+[report]
+# 1.0.1 实测 58%，先按 55% 立底线（只许往上调）
+fail_under = 55
+show_missing = True
+skip_covered = True

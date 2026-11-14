@@ -41,9 +41,21 @@ class FakeAmo:
         self.state = FakeState()
         self.moods = []
         self.added = []
+        self.date_now = []
+        self.date_fact = []
+        self.actions = []
 
     def set_date_mood(self, line, until_ts=0):
         self.moods.append((line, until_ts))
+
+    def set_date_now(self, line, until_ts=0):
+        self.date_now.append((line, until_ts))
+
+    def set_date_fact(self, line, until_ts=0):
+        self.date_fact.append((line, until_ts))
+
+    def set_current_action(self, action, until_ts=0, place="", zone="", category=""):
+        self.actions.append((action, until_ts, place))
 
     def add_hunger(self, target, amount):
         self.added.append(amount)
@@ -142,6 +154,12 @@ class DateEngineTests(unittest.TestCase):
         self.assertEqual(plugin.finance.amo.added, [100])
         self.assertIn("约会", plugin.finance.amo.moods[-1][0])
         self.assertTrue(plugin.finance_repo.meta_get("date:active"))
+        self.assertTrue(any("和老公" in m and "火锅" in m for m in plugin.finance.memories))
+        self.assertTrue(plugin.finance.amo.date_now)
+        self.assertTrue(plugin.finance.amo.date_fact)
+        self.assertTrue(plugin.finance.amo.actions)
+        self.assertTrue(any(day == "2026-11-14" and "和老公" in (item.get("activity") or "")
+                            for day, item in plugin.finance.amo.state.items))
 
     def test_attend_her_treat_missing_fund(self):
         plugin = FakePlugin(cash=50000)
@@ -182,6 +200,14 @@ class DateEngineTests(unittest.TestCase):
         self.assertEqual(rows[-1]["status"], "missed")
         self.assertTrue(any("忘了" in m for m in plugin.finance.memories))
         self.assertIn("冷淡", plugin.finance.amo.moods[-1][0])
+
+    def test_parse_when_chinese_periods(self):
+        morning = dt.datetime(2026, 11, 14, 9, 0)
+        self.assertEqual(date_engine._parse_when("中午吃火锅", morning), dt.datetime(2026, 11, 14, 12, 0))
+        self.assertEqual(date_engine._parse_when("晚上吃火锅", morning), dt.datetime(2026, 11, 14, 19, 30))
+        afternoon = dt.datetime(2026, 11, 14, 13, 0)
+        self.assertEqual(date_engine._parse_when("中午吃火锅", afternoon), dt.datetime(2026, 11, 15, 12, 0))
+        self.assertEqual(date_engine._parse_when("18:30 吃火锅", dt.datetime(2026, 11, 14, 20, 0)), dt.datetime(2026, 11, 15, 18, 30))
 
     def test_duplicate_same_activity_within_4h_ignored(self):
         plugin = FakePlugin()

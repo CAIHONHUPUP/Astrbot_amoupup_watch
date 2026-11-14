@@ -263,6 +263,13 @@ class FinanceProperty:
         text = self._buy_text(kind, price, down, monthly, years, rate, mood)
         await self._remember(text, "buy:%s:%s" % (kind, day))
         self._long_diary(text)
+        if kind == "house":
+            try:
+                hook = getattr(self.finance, "house_bought", None)
+                if callable(hook):
+                    hook(label)
+            except Exception as exc:
+                isolated("property.house_link", exc)
         return {"ok": True, "kind": kind, "price": price / 100.0, "down": down / 100.0,
                 "principal": principal / 100.0, "rate": rate, "months": months, "years": years,
                 "monthly": monthly / 100.0, "loan_id": loan_id}
@@ -297,6 +304,9 @@ class FinanceProperty:
 
     # ---------- 每月 1 日：还贷 / 物业费 / 养车 ----------
     async def settle_loans(self, now, period):
+        cfg = getattr(getattr(self, "plugin", None), "cfg_bool", None)
+        if callable(cfg) and not cfg("bill_autopay", True):
+            return {"ok": True, "deferred": True, "stage": "bill"}
         done = []
         for kind in ("house", "car"):
             loan = self.loan(kind)

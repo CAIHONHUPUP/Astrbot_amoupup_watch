@@ -18,6 +18,7 @@ ROUTES = [
     ("/finance/leave", "_api_leave", ["POST"], "守护面板：请假"),
     ("/finance/work", "_api_work", ["GET", "POST"], "守护面板：职场事件"),
     ("/finance/medical", "_api_medical", ["GET", "POST"], "守护面板：医疗"),
+    ("/housing", "_api_housing", ["GET"], "守护面板：房屋（数据来自能陪）"),
     ("/finance/insurance", "_api_insurance", ["GET", "POST"], "守护面板：保险"),
     ("/finance/social", "_api_social", ["GET", "POST"], "守护面板：社交"),
     ("/finance/bank", "_api_bank", ["GET", "POST"], "守护面板：银行"),

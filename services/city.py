@@ -9,10 +9,10 @@ import datetime as _dt
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import city_factor, city_tier, normalize_city, stable_int
+    from ..utils.helpers import city_factor, city_tier, normalize_city, stable_int, yuan
 except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
-    from utils.helpers import city_factor, city_tier, normalize_city, stable_int
+    from utils.helpers import city_factor, city_tier, normalize_city, stable_int, yuan
 
 
 def current_city(plugin):

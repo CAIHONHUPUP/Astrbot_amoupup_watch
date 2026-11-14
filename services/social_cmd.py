@@ -132,14 +132,8 @@ def inject_request(plugin, request):
     if not line or request is None:
         return
     try:
-        from astrbot.api.message_components import TextPart
-        parts = getattr(request, "extra_user_content_parts", None)
-        if parts is not None:
-            part = TextPart(text=line)
-            if hasattr(part, "mark_as_temp"):
-                part.mark_as_temp()
-            parts.append(part)
-            return
+        # AstrBot 4.29 没有 TextPart（api/core 都导不出），旧写法每次注入都 ImportError，
+        # 关系上下文实际从没进过模型；直接拼 system_prompt 最稳。
         request.system_prompt = str(getattr(request, "system_prompt", "") or "") + "\n" + line
     except Exception as exc:
         isolated("social.llm_inject", exc)

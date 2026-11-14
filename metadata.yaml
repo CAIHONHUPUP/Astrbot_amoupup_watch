@@ -2,7 +2,7 @@ name: Astrbot_amoupup_watch
 display_name: 我能永远守护你
 desc: 我能永远守护你：她有自己的社交世界（人物、事件、关系），数据与定时器全部自管；与 amo 只做握手接入，不改 amo 代码库。
 short_desc: 我能永远守护你
-version: 1.0.0
+version: 1.0.1
 author: 彩虹upup
 astrbot_version: ">=4.5.7"
 repo: https://github.com/CAIHONHUPUP/Astrbot_amoupup_watch

@@ -6,8 +6,10 @@
 """
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import json
+import os
 import time
 
 try:
@@ -207,6 +209,59 @@ class ApiMixin:
         except Exception as exc:
             isolated("web.lending", exc)
             return {"ok": False, "message": "人情债接口异常"}
+
+    def _house_image_data(self, path):
+        try:
+            if not path or not os.path.isfile(path):
+                return ""
+            if os.path.getsize(path) > 2 * 1024 * 1024:
+                return ""
+            with open(path, "rb") as fh:
+                return "data:image/png;base64," + base64.b64encode(fh.read()).decode("ascii")
+        except Exception:
+            return ""
+
+    async def _api_housing(self, request=None):
+        """房屋数据仍由能陪维护，守护只做面板代理和展示组装。"""
+        try:
+            finance = getattr(self, "finance", None)
+            amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+            housing = getattr(amo, "housing", None) if amo is not None else None
+            if housing is None:
+                return {"ok": False, "message": "能陪房屋模块未就绪", "homes": []}
+            current = housing.current() or {}
+            homes = []
+            for home in housing.homes():
+                images = {}
+                for room, path in (home.get("images") or {}).items():
+                    data = self._house_image_data(path)
+                    if data:
+                        images[room] = data
+                homes.append({
+                    "id": home.get("id"), "name": home.get("name") or "家",
+                    "kind": home.get("kind") or "rent",
+                    "status": home.get("status") or "idle",
+                    "style": home.get("style") or "简约风",
+                    "colors": home.get("colors") or "米白色",
+                    "furniture": list(home.get("furniture") or []),
+                    "rent_cents": int(home.get("rent_cents") or 0),
+                    "is_current": home.get("id") == current.get("id"),
+                    "images": images,
+                })
+            current_images = next((h["images"] for h in homes if h["is_current"]), {})
+            return {"ok": True, "overview": housing.card_text(), "own": housing.card_text("房产"),
+                    "rent": housing.card_text("租房"), "current": {
+                        "id": current.get("id"), "name": current.get("name") or "家",
+                        "kind": current.get("kind") or "rent",
+                        "status": current.get("status") or "living",
+                        "style": current.get("style") or "简约风",
+                        "colors": current.get("colors") or "米白色",
+                        "furniture": list(current.get("furniture") or []),
+                        "rent_cents": int(current.get("rent_cents") or 0),
+                        "images": current_images,
+                    }, "homes": homes}
+        except Exception as exc:
+            return {"ok": False, "message": "房屋读取失败：%s" % exc, "homes": []}
 
     async def _api_medical(self, request=None):
         """GET 看病历/生病状态；POST {level,name,days,event_id} 模拟一场病（走同一入口）。"""

@@ -1,4 +1,4 @@
-{
+﻿{
   "config_version": 5,
   "platform_settings": {
     "unique_session": false,
@@ -222,8 +222,8 @@
   "dashboard": {
     "enable": true,
     "username": "astrbot",
-    "password": "6f70e99ebbee42d578aac69552bd3230",
-    "pbkdf2_password": "pbkdf2_sha256$600000$e6749e9e08c6f3c2041855b4430829bd$96ecb0de39a173327f244be9ebd448a52090887d6d90e3e57bfb1279ac3cedd8",
+    "password": "f85a59f96ef27d42d75a6781b6430830",
+    "pbkdf2_password": "pbkdf2_sha256$600000$fd7123fa8e8ebbb8e7ba063a9802b48a$c4c8f6a434d0e616850b574b081b0bca4b654a8778dc04588147ac87488a1d03",
     "password_storage_upgraded": true,
     "password_change_required": true,
     "jwt_secret": "",

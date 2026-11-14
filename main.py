@@ -77,7 +77,7 @@ ROUTES = _load(_PKG, "api.routes", "ROUTES")
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag", "finance"]
 
@@ -183,54 +183,94 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
                 elif kind == "cash_withdrawable":
                     amo.wallet.credit(amount, "基金赎回到账", idem)
                     amo.wallet.credit(amount, "基金赎回可取", idem + ":w", account="withdrawable")
-                repo.finish_pending(idem)
+                await self.runtime.run_db(repo.finish_pending, idem, timeout=5)
             except Exception as exc:
                 isolated("finance.pending.apply", exc)
     async def _finance_tick(self):
         """每 30 分钟检查一次：工资 / 房租 / 水电是否到了该结算的日期。"""
         try:
             self.finance.backfill_withdrawable()
-            await self.finance_life.tick()
+            await self._guard_step("life", self.finance_life.tick())
+            try:
+                from .services import bill_flow
+            except ImportError:
+                from services import bill_flow
+            try:
+                bill_flow.create_due(self)
+                await bill_flow.overdue_tick(self)
+                hour = time.localtime().tm_hour
+                if 7 <= hour < 24:
+                    line = bill_flow.prompt_line(self)
+                    survival = bill_flow.survival_line(self)
+                    text = "；".join(item for item in (line, survival) if item)
+                    if text and hasattr(self.finance, "note_expense_summary"):
+                        self.finance.note_expense_summary(text)
+            except Exception as exc:
+                isolated("finance.bill_flow", exc)
             try:
                 from .services.date_engine import tick as date_tick
             except ImportError:
                 from services.date_engine import tick as date_tick
-            await date_tick(self)
+            await self._guard_step("date", date_tick(self))
+            try:
+                from .services.nightly_memory import nightly_tick
+            except ImportError:
+                from services.nightly_memory import nightly_tick
+            try:
+                await nightly_tick(self)
+            except Exception as exc:
+                logger.warning("[watch] 夜间记忆任务异常（不影响白天）: %s" % exc)
             try:
                 from .services.late_night_engine import tick as late_tick
             except ImportError:
                 from services.late_night_engine import tick as late_tick
-            await late_tick(self)
+            await self._guard_step("late_night", late_tick(self))
             try:
                 from .services.shopping_engine import tick as shopping_tick
             except ImportError:
                 from services.shopping_engine import tick as shopping_tick
-            await shopping_tick(self)
+            await self._guard_step("shopping", shopping_tick(self))
             try:
                 from .services.shopping_engine import flush as shop_flush
             except ImportError:
                 from services.shopping_engine import flush as shop_flush
-            await shop_flush(self)
+            await self._guard_step("shop_flush", shop_flush(self))
             try:
                 from .services.gift_engine import tick as gift_tick
             except ImportError:
                 from services.gift_engine import tick as gift_tick
-            await gift_tick(self)
-            await self._process_pending()
+            await self._guard_step("gift", gift_tick(self))
+            try:
+                from .services.social_engine import build_social
+            except ImportError:
+                from services.social_engine import build_social
+            try:
+                self.social = getattr(self, "social", None) or build_social(self)
+                social_out = await self.social.scheduled(_dt.datetime.now())
+                for item in (social_out or {}).get("events", []):
+                    text = str((item or {}).get("text") or "")
+                    if not text:
+                        continue
+                    amo = self.finance._amo() if hasattr(self.finance, "_amo") else None
+                    if amo is not None and hasattr(amo, "push_to_owner"):
+                        await amo.push_to_owner(text)
+            except Exception as exc:
+                isolated("finance.social_tick", exc)
+            await self._guard_step("pending", self._process_pending())
             if self.finance_help is not None:
                 self.finance_help.maybe_reset()
-                await self.finance_help.repay_tick()
+                await self._guard_step("help_repay", self.finance_help.repay_tick())
             if self.finance_decision is not None:
-                await self.finance_decision.tick()
+                await self._guard_step("decision", self.finance_decision.tick())
             if self.finance_daily is not None:
-                await self.finance_daily.tick()
+                await self._guard_step("daily", self.finance_daily.tick())
             if getattr(self, "bank", None) is None:
                 from .services.bank_engine import build_bank
                 self.bank = build_bank(self)
-            await self.bank.daily_tick()
+            await self._guard_step("bank_daily", self.bank.daily_tick())
             if self.work_events is not None:
-                await self.work_events.daily_random(_dt.datetime.now())
-                await self.work_events.daily_recap(_dt.datetime.now())
+                await self._guard_step("work_random", self.work_events.daily_random(_dt.datetime.now()))
+                await self._guard_step("work_recap", self.work_events.daily_recap(_dt.datetime.now()))
                 try:
                     if any("加班" in str(e) for e in (self.work_events.today_events() or [])):
                         amo = self.finance._amo() if hasattr(self.finance, "_amo") else None
@@ -238,20 +278,25 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
                             amo.on_forced_overtime()
                 except Exception:
                     pass
-                await self.fortune.monthly_roll(_dt.datetime.now())
-                await self.lending.repay_tick(_dt.datetime.now())
-                await self.medical.insurance_tick(_dt.datetime.now())
-                try:
-                    from .services.social_engine import build_social
-                    from .services.bankruptcy_engine import build_bankruptcy
-                except ImportError:
-                    from services.social_engine import build_social
-                    from services.bankruptcy_engine import build_bankruptcy
-                self.social = getattr(self, 'social', None) or build_social(self)
-                await self.social.scheduled(_dt.datetime.now())
-                await build_bankruptcy(self).check(_dt.datetime.now())
+            # 下面这些和 work_events 无关：以前缩进在 if 里，职场模块一出错就全不跑
+            await self._guard_step("fortune", self.fortune.monthly_roll(_dt.datetime.now()))
+            await self._guard_step("lending", self.lending.repay_tick(_dt.datetime.now()))
+            await self._guard_step("medical", self.medical.insurance_tick(_dt.datetime.now()))
+            try:
+                from .services.bankruptcy_engine import build_bankruptcy
+            except ImportError:
+                from services.bankruptcy_engine import build_bankruptcy
+            await self._guard_step("bankruptcy", build_bankruptcy(self).check(_dt.datetime.now()))
         except Exception as exc:
             isolated("finance.settle", exc)
+    async def _guard_step(self, name, awaitable):
+        """单个定时任务失败只隔离这一步：以前一个超时会让后面的账单/工资/体检全跳过。"""
+        try:
+            return await awaitable
+        except Exception as exc:
+            isolated("finance." + str(name), exc)
+            return None
+
     async def _heartbeat(self):
         """心跳必须走 DB 线程：scheduler 回调在事件循环上，同步写库就是阻塞 amo。"""
         if self.store is None:
@@ -399,6 +444,25 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         except ImportError:
             from services.social_cmd import inject_request
         inject_request(self, request)
+        try:
+            from .services.date_engine import active_date
+        except ImportError:
+            from services.date_engine import active_date
+        try:
+            base = str(getattr(request, "system_prompt", "") or "")
+            if "【约会确认】" not in base:
+                base += ("\n【约会确认】你在等老公赴约时，他回复“好/行/到了/来了/马上到/等我/出发了/"
+                         "在路上了”这类肯定词，要立刻调用 confirm_arrival 工具确认他的到达，并开心地说“你终于来啦”。")
+            if "【房产决策】" not in base:
+                base += ("\n【房产决策】你有权自己决定闲置房产出租或出售：如果觉得房租压力大、"
+                         "需要用钱、或房子空着浪费，可以自主调用 rent_out_property / sell_property；"
+                         "先想清楚再调用，不要为了讨好谁乱卖。")
+            if active_date(self) and "【约会现场】" not in base:
+                base += ("\n【约会现场】老公就在你身边，你们正在一起约会；不要问“你在哪/你怎么还没来”，"
+                         "可以有挽手、指东西、笑这类动作和现场对话。")
+            request.system_prompt = base
+        except Exception:
+            pass
     async def money_cmd(self, event: AstrMessageEvent):
         try:
             from .services.menu import money_reply
@@ -416,11 +480,60 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             text = "[WATCH] 命令出错已被隔离，amo 不受影响（trace_id=%s）" % _tid()
         yield event.plain_result(text)
 
-    async def finance_tool(self, event, action: str = "status", day: str = "", event_kind: str = ""):
+    async def _bank(self):
+        bank = getattr(self, "bank", None)
+        if bank is None:
+            from .services.bank_engine import build_bank
+            bank = build_bank(self)
+            self.bank = bank
+        return bank
+
+    async def finance_tool(self, event, action: str = "status", day: str = "", event_kind: str = "", amount: float = 0, code: str = "", qty: float = 0):
         try:
             from .services.finance_cmd import finance_reply
         except ImportError:
             from services.finance_cmd import finance_reply
+        act = str(action or "").lower()
+        if act in ("transfer_current_to_balance", "transfer_current", "活期转可用",
+                   "withdraw_fixed", "提前支取定期", "sell_stock", "卖股票",
+                   "sell_fund", "卖基金"):
+            try:
+                from .services import bill_flow as _bill_flow
+            except ImportError:
+                from services import bill_flow as _bill_flow
+            if _bill_flow.is_frozen(self):
+                return "银行把账户冻结了，先补上欠款才能动定期和股票。"
+        if act in ("transfer_current_to_balance", "transfer_current", "活期转可用"):
+            bank = await self._bank()
+            out = await bank.withdraw(int(round(float(amount or 0) * 100)), None)
+            return ("已把 %.2f 元活期转到可用余额。" % float(amount or 0)) if out.get("ok") else "活期余额不够。"
+        if act in ("withdraw_fixed", "提前支取定期"):
+            bank = await self._bank()
+            out = await bank.withdraw(int(round(float(amount or 0) * 100)), 0)
+            if not out.get("ok"):
+                return "没有可支取的定期存款。"
+            return "定期取出来了，利息损失了一点，有点心疼。" if out.get("penalty") else "定期到期取出到账。"
+        if act in ("sell_stock", "卖股票"):
+            try:
+                out = await self.trading.sell(str(code or ""), float(qty or 0), idem="tool:sell:%s" % time.strftime("%Y%m%d%H%M%S"))
+            except Exception as exc:
+                isolated("finance.tool.sell", exc)
+                return "股票卖出失败。"
+            return "股票卖出委托已提交，等 T+1 到账。" if out.get("ok") else "没有这只股票或数量不对。"
+        if act in ("sell_fund", "卖基金"):
+            try:
+                out = await self.trading.redeem(str(code or ""), float(qty or 0), idem="tool:redeem:%s" % time.strftime("%Y%m%d%H%M%S"))
+            except Exception as exc:
+                isolated("finance.tool.redeem", exc)
+                return "基金赎回失败。"
+            return "基金赎回已提交，T+7 到账。" if out.get("ok") else "没有这只基金或份额不对。"
+        if act in ("pay_bill", "缴费"):
+            try:
+                from .services import bill_flow
+            except ImportError:
+                from services import bill_flow
+            out = await bill_flow.pay(self, event_kind or "", payer="her")
+            return out.get("message") or "交了"
         return await finance_reply(self, action, day, event_kind)
     async def on_recommend(self, event):
         """用户说「建议买 600519/贵州茅台」：只入候选池，不买入。"""
@@ -498,6 +611,22 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         except Exception:
             pass
 
+    async def pay_bill_cmd(self, event, text=""):
+        try:
+            admin = event.is_admin() if hasattr(event, "is_admin") else True
+        except Exception:
+            admin = True
+        if not admin:
+            yield event.plain_result("这条指令只给管理员用哦。")
+            return
+        try:
+            from .services import bill_flow
+        except ImportError:
+            from services import bill_flow
+        name = str(getattr(event, "message_str", "") or text).replace("/代缴", "").strip()
+        out = await bill_flow.pay(self, name, payer="husband")
+        yield event.plain_result(out.get("message") or "交好了")
+
     async def bill_cmd(self, event, text=""):
         """账单：按大类分组 + 今日/本月合计。"""
         try:
@@ -538,8 +667,16 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
 
 
     async def on_date_propose(self, event):
-        """自然语言兜底：约定“去吃火锅吧” → 建约会；“我到了/开吃” → 赴约。"""
+        """自然语言兜底：约定“去吃火锅吧” → 建约会；“好/到了/我来了” → 赴约。"""
         text = str(getattr(event, "message_str", "") or "")
+        try:
+            from .services.date_engine import handle_date_text
+        except ImportError:
+            from services.date_engine import handle_date_text
+        early = await handle_date_text(self, text)
+        if early.get("handled"):
+            yield event.plain_result(early.get("message") or "")
+            return
         try:
             from .services.date_engine import attend_date, find_pending, make_date
         except ImportError:
@@ -600,6 +737,7 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         on_date_propose = filter.event_message_type(filter.EventMessageType.ALL)(on_date_propose)
         cancel_date_cmd = filter.command("取消约会")(cancel_date_cmd)
         bill_cmd = filter.command("账单")(bill_cmd)
+        pay_bill_cmd = filter.command("代缴")(pay_bill_cmd)
         bill_cmd = filter.command("日常明细")(bill_cmd)
         attend_date_cmd = filter.command("赴约")(attend_date_cmd)
         on_recommend = filter.event_message_type(filter.EventMessageType.ALL)(on_recommend)

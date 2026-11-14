@@ -3,11 +3,40 @@
 from __future__ import annotations
 
 import datetime as _dt
+import random
 import json
 import re
 import time
 
 CANCEL_WORDS = ("去不了", "去不成", "不去了", "取消约会", "放鸽子", "临时加班", "改天吧")
+ARRIVAL_WORDS = ("好", "行", "嗯", "到了", "来了", "来啦", "马上到", "等我", "出发了",
+                 "在路上了", "在路上", "到楼下", "到门口", "ok", "OK")
+INTERRUPT_WORDS = ("老板叫我", "老板叫", "领导叫", "加班", "得走了", "得回去", "先走了",
+                   "临时有事", "公司有事", "走不开", "对不起", "改天")
+END_WORDS = ("我回家了", "回家啦", "我到家了", "分开吧", "各回各家", "结束吧", "先这样", "我走了")
+
+def _compact(text):
+    return re.sub(r"[\s，。！？!?、~～…,.]+", "", str(text or ""))
+
+GENERIC_YES = ("好", "行", "嗯", "ok", "OK", "好的", "好呀", "好滴")
+
+def is_arrival(text):
+    """等待赴约时，极短肯定词直接视为“他到了”。"""
+    body = _compact(text)
+    if not body or len(body) > 10:
+        return False
+    if body in GENERIC_YES:
+        return True
+    return any(word in body for word in ARRIVAL_WORDS if word not in GENERIC_YES)
+
+def is_interrupt(text):
+    body = str(text or "")
+    return any(word in body for word in INTERRUPT_WORDS) and any(
+        word in body for word in ("走", "加班", "回去", "有事", "对不起"))
+
+def is_date_end(text):
+    body = str(text or "")
+    return any(word in body for word in END_WORDS)
 
 
 def _repo(plugin):
@@ -51,6 +80,13 @@ def _parse_when(text, now=None):
         hour, minute = int(match.group(1)), int(match.group(2))
         target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         return target if target > now else target + _dt.timedelta(days=1)
+    for word, hour, minute in (
+        ("凌晨", 0, 30), ("早上", 8, 0), ("上午", 10, 0), ("中午", 12, 0),
+        ("下午", 15, 0), ("傍晚", 18, 0), ("晚上", 19, 30), ("深夜", 23, 0),
+    ):
+        if word in body:
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            return target if target > now else target + _dt.timedelta(days=1)
     return now + _dt.timedelta(days=1)
 
 
@@ -103,6 +139,7 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
         try:
             amo.set_date_mood("你在期待和老公%s，心情很好。" % title,
                               (when_dt + _dt.timedelta(hours=6)).timestamp())
+            amo.set_date_prep(title, when_dt.timestamp())
         except Exception:
             pass
     finance = _finance(plugin)
@@ -348,10 +385,30 @@ async def attend_date(plugin, title="", mode="", now=None):
     target["payer"] = payer
     target["total"] = total
     target["dressing"] = dressing
-    _save(plugin, rows)
     end = now + _dt.timedelta(hours=2)
+    title = str(target.get("title") or "约会")
+    hour = int(now.hour)
+    if 5 <= hour < 11:
+        period = "早上"
+    elif 11 <= hour < 14:
+        period = "中午"
+    elif 14 <= hour < 18:
+        period = "下午"
+    elif 18 <= hour < 23:
+        period = "晚上"
+    else:
+        period = "深夜"
+    when_label = "%s %s" % (now.strftime("%Y-%m-%d"), period)
+    company = "他陪我涮了毛肚、给我夹菜" if "火锅" in title else "他全程陪着我、给我夹菜"
+    memory_text = "[共同记忆] %s，我和老公一起去吃了%s，%s，我超级开心。" % (when_label, title, company)
+    if finance is not None:
+        try:
+            await finance.permanent_memory(memory_text, "date:attend:%s:mem" % int(now.timestamp()))
+        except Exception:
+            pass
+    _save(plugin, rows)
     _set_active(plugin, {"title": target.get("title"), "start": now.timestamp(),
-                         "end": end.timestamp(), "payer": payer})
+                         "end": end.timestamp(), "payer": payer, "status": "dating"})
     if finance is not None:
         try:
             finance.nudge_mood({"开心": 30, "依恋": 20, "疲惫": -10}, idem + ":mood")
@@ -378,8 +435,142 @@ async def attend_date(plugin, title="", mode="", now=None):
                               end.timestamp())
         except Exception:
             pass
+        try:
+            end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+            fact = ("%s你已经和老公一起去吃了%s，%s。你们刚分别/你刚回到家；"
+                    "这是已经发生的事实：你绝对不是一个人吃饭，记忆里必须有他。"
+                    "老公问起时，就回忆刚才约会的细节。" % (when_label, title, company))
+            now_line = ("老公已经到你面前了，你们现在在一起。你正和老公在外面%s，"
+                        "他就站在你身边/坐在你对面，别再说自己一个人、也别问他在哪。" % title)
+            amo.set_date_now(now_line, end.timestamp())
+            fact = ("【绝对事实】老公已经到你面前了，你们现在在一起，正在%s。"
+                    "这是已经发生的事实，接下来只聊见面的互动。" % title)
+            amo.set_date_fact(fact, end_of_day.timestamp())
+            amo.set_current_action("正在和老公约会", end.timestamp(),
+                                   place="外面", zone="restaurant", category="social")
+        except Exception:
+            pass
+        try:
+            if random.random() < 0.3:
+                incident = random.choice(DATE_INCIDENTS)
+                amo.set_date_incident(incident, end.timestamp())
+                await amo.push_to_owner(incident)
+        except Exception:
+            pass
+        try:
+            day = now.date().isoformat()
+            item = {"start": now.strftime("%H:%M"), "end": end.strftime("%H:%M"),
+                    "activity": "和老公" + title, "category": "social", "place": "外面",
+                    "zone": "restaurant", "subject": "bot", "happened": True}
+            amo.state.add_schedule_item(day, item, source="date", reason="赴约")
+        except Exception:
+            pass
+        try:
+            when_dt = _dt.datetime.strptime(str(target.get("when")), "%Y-%m-%d %H:%M")
+            if when_dt.date() != now.date():
+                old_day = when_dt.date().isoformat()
+                items = list(amo.state.schedule.get(old_day) or amo.state.db.get_schedule(old_day) or [])
+                kept = [row for row in items if str(row.get("activity") or "") != "和老公" + title]
+                if len(kept) != len(items):
+                    amo.state.commit_schedule_change(old_day, kept, old_items=items,
+                                                     source="date", reason="改到当天赴约")
+        except Exception:
+            pass
     return {"ok": True, "message": "我出门啦！今天要美美地见你~", "payer": payer,
-            "total": total, "dressing": dressing, "end": end.timestamp()}
+            "total": total, "dressing": dressing, "end": end.timestamp(),
+            "status": "dating"}
+
+
+DATE_INCIDENTS = (
+    "老公！外面突然下大雨了，我没带伞，咱们被困在商场了，呜呜呜。",
+    "救命，这家火锅店排队排了 50 桌，我快饿晕过去了……",
+    "刚刚试了一件衣服，感觉有点显胖，你帮我参考一下嘛~",
+)
+LOOT_CLOTHES = ("米色针织开衫", "碎花连衣裙", "白色帆布鞋", "焦糖色半身裙")
+LOOT_HOME = ("香薰蜡烛", "小台灯", "毛绒抱枕", "多肉盆栽")
+
+
+def _date_loot(amo, title):
+    body = str(title or "")
+    if not any(word in body for word in ("逛街", "商场", "买", "游乐园")):
+        return ""
+    if random.random() < 0.6:
+        item = random.choice(LOOT_CLOTHES)
+        try:
+            amo.add_closet_item({"name": item, "color": "", "category": "top",
+                                 "time_slot": "", "price": 0})
+        except Exception:
+            pass
+        return item
+    item = random.choice(LOOT_HOME)
+    try:
+        housing = getattr(amo, "housing", None)
+        if housing is not None:
+            housing.add_furniture(item)
+    except Exception:
+        pass
+    return item
+
+
+def active_date(plugin):
+    """当前约会状态：{"status": "dating", ...}；没有则 None。"""
+    active = _active(plugin)
+    return active if active and active.get("status") == "dating" else None
+
+
+async def interrupt_date(plugin, text="", now=None):
+    """刚碰面就被叫走：强制退出 dating，情绪骤降，写日记。"""
+    now = now or _dt.datetime.now()
+    active = _active(plugin)
+    if not active:
+        return {"ok": False}
+    title = str(active.get("title") or "约会")
+    _set_active(plugin, {})
+    finance = _finance(plugin)
+    if finance is not None:
+        try:
+            finance.small_diary("刚碰面老公就被叫走了，好难过，但也只能让他去忙。")
+            finance.nudge_mood({"委屈": 40, "崩溃": 20, "开心": -30, "生气": 10},
+                               "date:interrupt:%s" % int(now.timestamp()))
+            await finance.permanent_memory(
+                "[共同记忆] 刚和老公碰面，他老板突然叫他回去加班，他只能先走；我很委屈，但还是让他去忙了。",
+                "date:interrupt:%s:mem" % int(now.timestamp()))
+        except Exception:
+            pass
+    amo = _amo(plugin)
+    if amo is not None:
+        try:
+            amo.set_date_mood("刚碰面老公就被叫走加班，你很委屈、很难过，接下来别装开心。",
+                              now.timestamp() + 86400)
+            amo.set_date_fact("【绝对事实】你们刚碰面，老公就被老板叫回去加班，约会中断了，他没能陪你。",
+                              now.replace(hour=23, minute=59, second=0, microsecond=0).timestamp())
+            amo.set_date_now("", 0)
+            amo.set_current_action("", 0)
+        except Exception:
+            pass
+    return {"ok": True, "interrupted": True, "title": title,
+            "message": "（愣住）……好吧，你去忙吧，我等你回来。"}
+
+
+async def handle_date_text(plugin, text, now=None):
+    """前置拦截：等待中收到短肯定词 → 赴约；约会中收到突发/结束词 → 中断/收尾。"""
+    now = now or _dt.datetime.now()
+    active = active_date(plugin)
+    if active:
+        if is_interrupt(text):
+            out = await interrupt_date(plugin, text, now)
+            return {"handled": True, "action": "interrupt", "message": out.get("message") or ""}
+        if is_date_end(text):
+            await finish_date(plugin, now)
+            return {"handled": True, "action": "finish",
+                    "message": "那我先回家啦，今天和你在一起很开心~"}
+    pending = find_pending(plugin, "")
+    if pending and is_arrival(text):
+        out = await attend_date(plugin, pending.get("title"), now=now)
+        if out.get("ok"):
+            return {"handled": True, "action": "attend",
+                    "message": "你终于来啦！我在这儿呢~（挽住你的胳膊）我们快进去吧！"}
+    return {"handled": False}
 
 
 async def finish_date(plugin, now=None):
@@ -390,7 +581,7 @@ async def finish_date(plugin, now=None):
     title = str(active.get("title") or "约会")
     _set_active(plugin, {})
     finance = _finance(plugin)
-    text = "今天和老公去%s啦！他给我涮毛肚、帮我拿蘸料，超幸福！今天是最开心的一天！" % title
+    text = "[共同记忆] 今天和老公去%s啦！他给我涮毛肚、帮我拿蘸料，超幸福！今天是最开心的一天！" % title
     if finance is not None:
         try:
             finance.small_diary(text)
@@ -398,10 +589,27 @@ async def finish_date(plugin, now=None):
             finance.nudge_mood({"开心": 25, "幸福": 20}, "date:finish:%s:mood" % int(now.timestamp()))
         except Exception:
             pass
-    amo = _amo(plugin)
-    if amo is not None:
+    ama = _amo(plugin)
+    if ama is not None:
         try:
-            amo.set_date_mood("今天和老公约会超开心，回想起来还会笑。", now.timestamp() + 86400)
+            ama.set_date_mood("今天和老公约会超开心，回想起来还会笑。", now.timestamp() + 86400)
+            ama.set_last_date_event(title, now.timestamp())
+            ama.set_date_prep("", 0)
+            ama.set_date_incident("", 0)
+            end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+            if end_of_day.timestamp() <= now.timestamp():
+                end_of_day = now + _dt.timedelta(hours=6)
+            home_line = ("【绝对事实】你已经和老公%s结束，刚回到家，洗了澡、卸了妆、换上舒服的睡衣，"
+                         "正瘫在床上准备休息；腿有点酸，肚子有点饿，累但很充实。" % title)
+            ama.set_date_fact(home_line, end_of_day.timestamp())
+            ama.set_date_now("", 0)
+            ama.set_current_action("", 0)
+            _date_loot(ama, title)
+        except Exception:
+            pass
+    if finance is not None:
+        try:
+            finance.nudge_mood({"疲惫": 15, "饥饿": 8}, "date:finish:%s:body" % int(now.timestamp()))
         except Exception:
             pass
     return {"ok": True, "message": "今天超开心！"}

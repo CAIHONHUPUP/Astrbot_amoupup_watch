@@ -132,6 +132,54 @@ class ToolWrappersMixin:
 
 
 
+        @_optional_hook("llm_tool")("confirm_arrival")
+        async def confirm_arrival(self, event, activity_name: str = ""):
+
+            """等待赴约时，确认老公已经到达（好/到了/我来了）。"""
+
+            try:
+
+                from .core.llm_tools import confirm_arrival_tool
+
+            except ImportError:
+
+                from core.llm_tools import confirm_arrival_tool
+
+            return await confirm_arrival_tool(self, activity_name)
+
+
+        @_optional_hook("llm_tool")("rent_out_property")
+        async def rent_out_property(self, event, property_name: str = "", rent: float = 0.0):
+
+            """自主决定出租闲置自有房产（房租压力大/空着浪费时）。"""
+
+            try:
+
+                from .core.llm_tools import rent_out_property_tool
+
+            except ImportError:
+
+                from core.llm_tools import rent_out_property_tool
+
+            return await rent_out_property_tool(self, property_name, rent)
+
+
+        @_optional_hook("llm_tool")("sell_property")
+        async def sell_property(self, event, property_name: str = ""):
+
+            """自主决定出售闲置房产（急需用钱时）。"""
+
+            try:
+
+                from .core.llm_tools import sell_property_tool
+
+            except ImportError:
+
+                from core.llm_tools import sell_property_tool
+
+            return await sell_property_tool(self, property_name)
+
+
         @_optional_hook("llm_tool")("propose_date")
         async def propose_date_tool(self, event, activity: str = "", time: str = ""):
 

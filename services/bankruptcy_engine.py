@@ -43,6 +43,12 @@ class BankruptcyEngine:
             except Exception as exc:
                 isolated("bankruptcy.sell", exc)
         # 房产/车辆 70% 拍卖
+        try:
+            hook = getattr(self.finance, "house_lost", None)
+            if callable(hook):
+                hook()
+        except Exception as exc:
+            isolated("bankruptcy.house_link", exc)
         for kind in ("house", "car"):
             rows = self.repo.assets_of(kind) if hasattr(self.repo, "assets_of") else []
             for row in rows:

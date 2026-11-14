@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 try:
@@ -36,6 +37,11 @@ except ImportError:  # 按顶层包/单文件加载时
 
 
 AMO_PLUGIN_NAME = "Astrbot_amoupup_forever"
+
+#: 逛街买到这些东西才算“给家里添家具”，普通衣服不碰房屋系统
+FURNITURE_WORDS = ("沙发", "床", "衣柜", "餐桌", "书桌", "书柜", "电视柜", "茶几",
+                   "冰箱", "洗衣机", "空调", "梳妆台", "地毯", "窗帘", "吊灯", "置物架",
+                   "鞋柜", "床头柜", "台灯", "桌布", "抱枕", "床单", "被套")
 
 
 class FinanceLink:
@@ -58,6 +64,62 @@ class FinanceLink:
         except Exception as exc:
             isolated("finance.amo", exc)
             return None
+
+    # ---------- 房屋联动 ----------
+    def house_bought(self, label="房子", city="", style="简约风"):
+        """买房成功：写进 amo 房屋系统并搬入，再异步生成客厅/卧室场景图。"""
+        amo = self._amo()
+        housing = getattr(amo, "housing", None) if amo is not None else None
+        if housing is None:
+            return False
+        try:
+            home = housing.add_home(str(label or "房子"), kind="own",
+                                    city=str(city or ""), style=str(style or "简约风"))
+            housing.move_in(home["id"])
+            spawn = getattr(amo, "_spawn", None)
+            ensure = getattr(amo, "_ensure_home_images", None)
+            if callable(spawn) and callable(ensure):
+                spawn(ensure(force=True))
+            return True
+        except Exception as exc:
+            isolated("finance.house_bought", exc)
+            return False
+
+    def house_lost(self):
+        """破产/法拍：让她搬回最便宜的出租屋。"""
+        amo = self._amo()
+        housing = getattr(amo, "housing", None) if amo is not None else None
+        if housing is None:
+            return False
+        try:
+            housing.on_bankruptcy()
+            return True
+        except Exception as exc:
+            isolated("finance.house_lost", exc)
+            return False
+
+    def furniture_bought(self, name):
+        """逛街买到大件家具：写进当前家的陈设；大件再触发一次场景图更新。"""
+        body = str(name or "").strip()
+        if not any(word in body for word in FURNITURE_WORDS):
+            return False
+        amo = self._amo()
+        housing = getattr(amo, "housing", None) if amo is not None else None
+        if housing is None:
+            return False
+        try:
+            result = housing.add_furniture(body)
+            if not result.get("ok"):
+                return False
+            if result.get("redraw"):
+                spawn = getattr(amo, "_spawn", None)
+                ensure = getattr(amo, "_ensure_home_images", None)
+                if callable(spawn) and callable(ensure):
+                    spawn(ensure())
+            return True
+        except Exception as exc:
+            isolated("finance.furniture_bought", exc)
+            return False
 
     # ---------- 只读 ----------
     def balance_cents(self):
