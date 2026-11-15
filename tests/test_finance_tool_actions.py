@@ -128,7 +128,7 @@ class FinanceToolActionTests(unittest.TestCase):
             "kind": "rent", "name": "房租", "amount_cents": 300000,
             "status": "due", "created_ts": now.timestamp(),
         }])
-        msg = _run(plugin, action="pay_bill", event_kind="rent")
+        msg = _run(plugin, action="pay_bill", event_kind="rent", now=now)
         self.assertIn("交上了", msg)
         self.assertEqual(bf.load_due(plugin, "2026-11")[0]["status"], "paid")
 
@@ -154,7 +154,7 @@ class FinanceToolActionTests(unittest.TestCase):
             "kind": "rent", "name": "房租", "amount_cents": 300000,
             "status": "due", "created_ts": now.timestamp(),
         }])
-        msg = _run(plugin, action="pay_bill", event_kind="rent")
+        msg = _run(plugin, action="pay_bill", event_kind="rent", now=now)
         self.assertIn("交上了", msg)
 
 

@@ -14,9 +14,19 @@ async def buy_insurance_tool(plugin, insurance_type=""):
     key = ALIASES.get(str(insurance_type or "").strip())
     if key is None:
         return "支持的险种：e生保 / 医无忧 / 金钟罩（意外险）/ 重疾险 / 交强险 / 商业车险 / 家财险"
-    if key in ("交强险", "商车险") and not getattr(plugin, "has_car", False):
+    # 车/房状态在 finance_property.state() 里；plugin 上没有 has_car/has_house 字段
+    prop = getattr(plugin, "finance_property", None)
+    info = {}
+    if prop is not None and callable(getattr(prop, "state", None)):
+        try:
+            info = prop.state() or {}
+        except Exception:
+            info = {}
+    has_car = bool(info.get("has_car", getattr(plugin, "has_car", False)))
+    has_house = bool(info.get("has_house", getattr(plugin, "has_house", False)))
+    if key in ("交强险", "商车险") and not has_car:
         return "她现在没有车，不用买车险。"
-    if key == "家财险" and not getattr(plugin, "has_house", False):
+    if key == "家财险" and not has_house:
         return "她现在没有房，不用买家财险。"
     try:
         from ..services.insurance_engine import PRODUCTS, build_insurance
@@ -181,7 +191,9 @@ async def propose_date_tool(plugin, activity="", time=""):
     out = await make_date(plugin, activity, when)
     if not out.get("ok"):
         return out.get("message") or "我们不是已经约好了吗？我记着呢！"
-    return "好呀好呀！我这就准备出门，%s见！" % (raw or "等会儿")
+
+    # 只用口语说时间，绝不把 11-16 18:27 这种系统格式糊到聊天里
+    return out.get("message") or "好呀好呀！那说定啦，晚点见~"
 
 
 async def confirm_arrival_tool(plugin, activity_name=""):
@@ -191,11 +203,54 @@ async def confirm_arrival_tool(plugin, activity_name=""):
     except ImportError:
         from services.date_engine import active_date, attend_date, find_pending
     if active_date(plugin):
-        return "你们已经在一起啦，牵着我进去吧~"
+        return "（系统）你们已经在约会中了。不要复述这句提示，按【约会开场】的事实自己接话。"
     pending = find_pending(plugin, activity_name)
     if pending is None:
         return "现在没有在等你赴约呀。"
     out = await attend_date(plugin, pending.get("title"))
     if not out.get("ok"):
         return out.get("message") or "约会没开始成……"
-    return "你终于来啦！我在这儿呢~（挽住你的胳膊）我们快进去吧！"
+    return ("（系统）约会已经开始，状态已切到 dating。"
+            "请按【约会开场】里的事件/环境/穿搭/状态，自己写见面第一句，"
+            "动作必须按现场自由设计，禁止套用固定台词或固定动作。")
+
+
+async def accept_social_event_tool(plugin, npc="", place="", amount=0.0, note="", start="", end="",
+                                    about_user=""):
+    """接受邀约：真实扣款、占日程、刷新此刻动作、写记忆/日记/流水。
+
+    借钱时金额不能超过余额，超出会被拒；可以少借一点（自己传 amount）。
+    """
+    engine = getattr(plugin, "social", None)
+    if engine is None:
+        return "（系统）现在没有待回的邀约，不要编造答应过谁。"
+    try:
+        amount_cents = int(round(float(amount or 0) * 100))
+    except (TypeError, ValueError):
+        amount_cents = 0
+    out = await engine.accept_invite(npc=str(npc or ""), place=str(place or ""),
+                                     amount_cents=amount_cents, note=str(note or ""),
+                                     start=str(start or ""), end=str(end or ""),
+                                     about_user=str(about_user or ""))
+    if not out.get("ok"):
+        return ("（系统）没去成：%s。按这个事实说话，不要假装已经出门。"
+                % (out.get("message") or out.get("reason") or "失败"))
+    try:
+        from ..utils.helpers import yuan
+    except ImportError:
+        from utils.helpers import yuan
+    return ("（系统）已按她的决定结算：%s，花了 %s。日程、情绪、记忆都已更新；"
+            "按这个事实自己说话，不要复述本提示。" % (out.get("note") or "去了",
+                                              yuan(int(out.get("cost") or 0))))
+
+
+async def reject_social_event_tool(plugin, reason="", note=""):
+    """婉拒邀约：记下真实理由，不动钱、不占日程。"""
+    engine = getattr(plugin, "social", None)
+    if engine is None:
+        return "（系统）现在没有待回的邀约。"
+    out = await engine.reject_invite(reason=str(reason or ""), note=str(note or ""))
+    if not out.get("ok"):
+        return "（系统）没拒绝成：%s" % (out.get("message") or out.get("reason") or "失败")
+    return ("（系统）已经婉拒了（理由：%s）。接下来照实说，不要一边拒绝一边答应。"
+            % (out.get("reason") or out.get("note") or "不方便"))

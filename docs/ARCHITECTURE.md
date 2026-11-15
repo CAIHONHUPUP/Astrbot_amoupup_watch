@@ -2,7 +2,9 @@
 
 ## 一句话
 
-`main.py` 只做装配与分发；业务在 `services/`，决策与联动在 `core/`，数据在 `models/`，纯函数在 `utils/`，展现在 `ui/`，接口在 `api/`。
+`main.py` 只做装配与分发；业务在 `services/`，决策/联动/定时任务在 `core/`，数据在 `models/`，纯函数在 `utils/`，展现在 `ui/`，接口在 `api/`。
+
+定时任务（scheduler 回调）单独放 `core/jobs.py`，签名统一 `async def xxx(plugin)`；main 里同名方法只留一行转发，scheduler 的引用和既有测试都不受影响。
 
 ## 依赖方向（单向，禁止回指）
 
@@ -20,7 +22,7 @@
 | `api/` | Web 接口处理（ApiMixin） | 业务规则 |
 | `ui/` | 面板字段组装、文本卡片；`views/守护/index.html` 前端 | 写库 |
 | `services/` | 交易、行情、候选池、生活结算、三餐、消费、开销、工资、职场事件、房车、信贷、城市 | HTTP、amo 协议细节 |
-| `core/` | 三次自主决策、LLM 决策、amo 联动桥、四层记忆、定时器、线程池 | 具体业务公式 |
+| `core/` | 三次自主决策、LLM 决策、amo 联动桥、四层记忆、调度器、线程池、`jobs.py`（定时任务） | 具体业务公式 |
 | `models/` | 连接/迁移（db）、资产/贷款/流水（ledger）、记忆索引（memory） | 业务判断 |
 | `utils/` | 城市系数、房价房租、金额取整、节假日、交易时段、稳定随机 | 状态 |
 
@@ -45,9 +47,10 @@
 
 ## 测试
 
-    PYTHONPATH=. pytest tests -q      # 138 项
+    PYTHONPATH=. pytest tests -q      # 309 项
+    python tools/quality_gate.py      # 编译 / pyflakes / 防长胖 / 静默异常 / 全量测试
 
-- `test_main_contract.py`：main.py ≤ 520 行、禁业务实现、分层目录必须在、根目录不许有 shim；
+- `test_main_contract.py`：main.py ≤ 1000 行、禁业务实现、分层目录必须在、根目录不许有 shim；
 - `test_sim_clock.py`：发薪、买房换租、买车养车、余额求助、重启不丢；
 - 其余按引擎分文件（trade/life/work/property/expense/city/leave/work_events…）。
 
@@ -59,5 +62,8 @@
 4. core（决策/联动/记忆/调度）
 5. ui + api（从 main 拆出 237+232 行）
 6. main 瘦身 1000 → 486 行；根目录 20 个 shim 全部删除
+7. 2026-11-15 定时任务（`_process_pending` / `_finance_tick` / `_heartbeat`）搬进 `core/jobs.py`：main 639 行，
+   同名方法只剩一行转发；`tools/quality_gate.py` 增加防长胖预算（main ≤ 900 行、单函数 < 400 行、
+   静默 `except: pass` ≤ 80）
 
 备份在 `D:\dafeiyu\backup\main-split-*`、`shim-clean-*`。

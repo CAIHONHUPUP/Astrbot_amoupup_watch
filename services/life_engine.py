@@ -11,9 +11,9 @@ import hashlib
 import time
 
 try:
-    from ..utils.helpers import city_factor, rent_cents as base_rent_cents
+    from ..utils.helpers import rent_cents as base_rent_cents
 except ImportError:  # 按顶层包（services.xxx）导入时
-    from utils.helpers import city_factor, rent_cents as base_rent_cents
+    from utils.helpers import rent_cents as base_rent_cents
 from .city import current_city, factor_of
 
 DEFAULT_SALARY_CENTS = 680000          # 6800 元
@@ -62,7 +62,7 @@ class FinanceLife:
         cash = self.finance.balance_cents() or 0
         market = 0
         for row in self.repo.positions():
-            market += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)
+            market += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)  # type: ignore[assignment]
         debt = sum(int(x.get("balance_cents") or 0) for x in self.repo.loans())
         assets = sum(int(x.get("value_cents") or 0) for x in self.repo.assets())
         return int(cash + market + assets - debt)
@@ -77,11 +77,20 @@ class FinanceLife:
             initial = 2300000
         if initial > 0:
             self.repo.meta_set("initial_deposit_cents", initial)
-        self.repo.meta_set("seeded", "1")
+        # 只有真正入账成功才写 seeded：amo 冷启动时 credit_initial 会返回 False，
+        # 先写标记会把首次存款永久吞掉（之后每个 tick 都不会再补）。
         try:
-            return bool(self.finance.credit_initial(initial))
+            ok = bool(self.finance.credit_initial(initial))
         except Exception:
-            return False
+            ok = False
+        if not ok:
+            try:
+                ok = int(self.finance.balance_cents() or 0) >= initial
+            except Exception:
+                ok = False
+        if ok:
+            self.repo.meta_set("seeded", "1")
+        return ok
 
     def _half_key(self, now):
         return "%d-H%d" % (now.year, 1 if now.month <= 6 else 2)
@@ -139,7 +148,7 @@ class FinanceLife:
         now = now or _dt.datetime.now()
         finance = getattr(self, "finance", None)
         amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
-        state = {}
+        state = {}  # type: ignore[var-annotated]
         if amo is not None and hasattr(amo, "hunger_state"):
             try:
                 state = amo.hunger_state() or {}
@@ -151,7 +160,7 @@ class FinanceLife:
             return None
         if float(state.get("value") or 100) >= 30:
             return None
-        cash = int(finance.balance_cents() or 0)
+        cash = int(finance.balance_cents() or 0)  # type: ignore[union-attr]
         if cash < 500:
             text = "老公，我肚子好饿，但是微信里连买个包子的钱都不够了，呜呜呜……"
             try:
@@ -162,14 +171,14 @@ class FinanceLife:
             except Exception:
                 pass
             try:
-                finance.nudge_mood({"委屈": 25, "郁闷": 20, "焦虑": 15},
+                finance.nudge_mood({"委屈": 25, "郁闷": 20, "焦虑": 15},  # type: ignore[union-attr]
                                    "hunger:help:%s" % time.strftime("%Y%m%d"))
-                finance.small_diary("肚子好饿，翻遍了房间只有一包过期的饼干……")
+                finance.small_diary("肚子好饿，翻遍了房间只有一包过期的饼干……")  # type: ignore[union-attr]
             except Exception:
                 pass
             return {"help": True}
         sick = bool(state.get("sick"))
-        mood = finance.mood() or {}
+        mood = finance.mood() or {}  # type: ignore[union-attr]
         night = now.hour >= 23 or now.hour < 5
         if cash < 5000:
             food, amount, gain, deltas, mood_word = ("馒头和泡面", 800, 15, {"委屈": 10}, "有点委屈")
@@ -202,7 +211,7 @@ class FinanceLife:
             except Exception:
                 pass
         idem = "hunger:%s:%s" % (time.strftime("%Y%m%d%H"), food)
-        res = await finance.expense(amount, "吃的：%s" % food, idem, necessary=True)
+        res = await finance.expense(amount, "吃的：%s" % food, idem, necessary=True)  # type: ignore[union-attr]
         if not isinstance(res, dict) or not res.get("ok"):
             return None
         try:
@@ -214,17 +223,17 @@ class FinanceLife:
         except Exception:
             pass
         try:
-            finance.nudge_mood(deltas, idem + ":mood")
+            finance.nudge_mood(deltas, idem + ":mood")  # type: ignore[union-attr]
             if sick:
                 diary = "生病了只能喝粥，好想吃火锅。"
             elif night:
                 diary = "今天半夜饿了，没忍住煮了包泡面，加了根肠，花了 %d 块钱。" % max(1, amount // 100)
             else:
                 diary = "饿了，买了%s，花了 %.2f 元，吃完舒服多了。" % (food, amount / 100.0)
-            finance.small_diary(diary)
+            finance.small_diary(diary)  # type: ignore[union-attr]
             hour = int(getattr(now, "hour", 12))
             if hour >= 23 or hour < 5:
-                await finance.permanent_memory("半夜饿得不行，吃了%s。" % food, idem + ":mem")
+                await finance.permanent_memory("半夜饿得不行，吃了%s。" % food, idem + ":mem")  # type: ignore[union-attr]
         except Exception:
             pass
         return {"food": food, "amount": amount, "gain": gain, "mood": mood_word}
@@ -260,10 +269,30 @@ class FinanceLife:
             steps["maybe_buy"] = await prop.maybe_buy(now)
         return steps
 
+    def _bill_deferred(self, now):
+        """1 号遇周末/节假日顺延；工作日也要等到 9 点银行才扣。"""
+        try:
+            from . import bill_flow
+        except ImportError:
+            import services.bill_flow as bill_flow
+        holiday_set = bill_flow.holidays(self.plugin)
+        due = bill_flow.due_day(now, holiday_set)
+        return (now.date() < due or int(now.hour) < 9
+                or not bill_flow.is_workday(now.date(), holiday_set))
+
     async def _salary(self, now, period):
         salary_mod = getattr(self.plugin, "finance_salary", None)
-        if now.day < 15 or self.repo.settled(period, "salary"):
+        if self.repo.settled(period, "salary"):
             return "skip"
+        try:
+            from . import bill_flow
+        except ImportError:
+            import services.bill_flow as bill_flow
+        holiday_set = bill_flow.holidays(self.plugin)
+        pay_day = bill_flow.salary_pay_day(now, holiday_set)
+        if (now.date() < pay_day or int(now.hour) < 10
+                or not bill_flow.is_workday(now.date(), holiday_set)):
+            return "deferred"
         if now.month in (1, 7):
             raised = self._raise_salary(now)   # 定期调薪（1/7 月）
             if raised and salary_mod is not None:
@@ -280,8 +309,10 @@ class FinanceLife:
         return "ok" if result.get("ok") else "fail"
 
     async def _rent(self, now, period):
-        if now.day < 1 or self.repo.settled(period, "rent"):
+        if self.repo.settled(period, "rent"):
             return "skip"
+        if self._bill_deferred(now):
+            return "bill_deferred"
         if self._has("house"):
             self.repo.mark_settled(period, "rent", "has_house")
             return "has_house"
@@ -297,8 +328,8 @@ class FinanceLife:
 
     async def _utilities(self, now, period):
         """水 / 电 / 燃气 / 宽带 逐项扣；任何一项失败就停在那项，先预警再进 5% 流程。"""
-        if now.day < 1:
-            return "skip"
+        if self._bill_deferred(now):
+            return "bill_deferred"
         cfg = getattr(getattr(self, "plugin", None), "cfg_bool", None)
         if callable(cfg) and not cfg("bill_autopay", True):
             return "bill_deferred"

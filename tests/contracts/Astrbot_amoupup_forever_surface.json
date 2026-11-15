@@ -1,0 +1,171 @@
+{
+  "_owner_umos": [],
+  "add_closet_item": [
+    "item_data"
+  ],
+  "add_hunger": [
+    "amount",
+    "target"
+  ],
+  "add_schedule_item": [
+    "day",
+    "item",
+    "reason",
+    "source"
+  ],
+  "balance": [
+    "account"
+  ],
+  "chat_raw": [
+    "contexts",
+    "prompt",
+    "system",
+    "umo"
+  ],
+  "commit_schedule_change": [
+    "day",
+    "invalidate_from",
+    "new_items",
+    "old_items",
+    "reason",
+    "source"
+  ],
+  "credit": [
+    "account",
+    "actor",
+    "amount_cents",
+    "fund_source",
+    "idem",
+    "reason",
+    "ref"
+  ],
+  "current_activity": [],
+  "debit": [
+    "account",
+    "actor",
+    "amount_cents",
+    "category",
+    "fund_source",
+    "idem",
+    "item_name",
+    "reason",
+    "ref",
+    "sub_category",
+    "trigger_reason"
+  ],
+  "finance_recall": [
+    "limit",
+    "query"
+  ],
+  "finance_remember": [
+    "content",
+    "idem_key",
+    "kind",
+    "tier"
+  ],
+  "get_hunger": [
+    "target"
+  ],
+  "get_schedule": [
+    "day"
+  ],
+  "hunger_help": [
+    "message"
+  ],
+  "hunger_state": [],
+  "kv_get": [
+    "default",
+    "key"
+  ],
+  "kv_set": [
+    "key",
+    "value"
+  ],
+  "late_night_state": [],
+  "ledger": [
+    "limit"
+  ],
+  "mark_meal": [
+    "cooldown_hours",
+    "food",
+    "mood"
+  ],
+  "note_expense_summary": [
+    "line"
+  ],
+  "note_gift_event": [
+    "line",
+    "until_ts"
+  ],
+  "note_late_fine": [
+    "amount_cents"
+  ],
+  "note_late_snack": [
+    "amount_cents",
+    "food"
+  ],
+  "note_purchase": [
+    "name",
+    "price_cents"
+  ],
+  "note_shopping_pending": [
+    "line",
+    "until_ts"
+  ],
+  "note_transfer_event": [
+    "amount_cents"
+  ],
+  "nudge": [],
+  "on_big_stock_loss": [],
+  "on_forced_overtime": [],
+  "push_to_owner": [
+    "text"
+  ],
+  "request_hunger_help": [],
+  "save_diary": [
+    "day",
+    "hour",
+    "status",
+    "text",
+    "version"
+  ],
+  "set_current_action": [
+    "action",
+    "category",
+    "place",
+    "until_ts",
+    "zone"
+  ],
+  "set_date_fact": [
+    "line",
+    "until_ts"
+  ],
+  "set_date_incident": [
+    "text",
+    "until_ts"
+  ],
+  "set_date_meet": [
+    "place",
+    "title",
+    "ttl"
+  ],
+  "set_date_mood": [
+    "line",
+    "until_ts"
+  ],
+  "set_date_now": [
+    "line",
+    "since",
+    "until_ts"
+  ],
+  "set_date_prep": [
+    "activity",
+    "start_ts"
+  ],
+  "shopping_trigger": [
+    "now"
+  ],
+  "soothe_late_night": [
+    "reason"
+  ]
+}

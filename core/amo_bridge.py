@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import re
 import time
@@ -26,14 +27,19 @@ except Exception:  # 离线单测
 
 try:
     from ..utils.mood import (expense_level, income_level, low_balance_level, pnl_level,
-                               reaction_line, word_for_score, yuan)
+                               word_for_score, yuan)
     from ..guard import isolated
     from .memory_link import MemoryLink
 except ImportError:  # 按顶层包/单文件加载时
     from utils.mood import (expense_level, income_level, low_balance_level, pnl_level,
-                              reaction_line, word_for_score, yuan)
+                              word_for_score, yuan)
     from guard import isolated
     from core.memory_link import MemoryLink
+
+try:
+    from ..utils import facts
+except ImportError:
+    from utils import facts
 
 
 AMO_PLUGIN_NAME = "Astrbot_amoupup_forever"
@@ -264,31 +270,59 @@ class FinanceLink:
             isolated("finance.nudge", exc)
             return False
 
-    def _schedule(self, amo, kind, amount_cents, before, after, note=""):
+    def _schedule(self, amo, kind, amount_cents, note="", when_ts=None):
         try:
-            now = time.localtime()
-            start = "%02d:%02d" % (now.tm_hour, now.tm_min)
-            end_min = (now.tm_hour * 60 + now.tm_min + 10) % (24 * 60)
+            stamp = time.localtime(when_ts) if when_ts else time.localtime()
+            if 0 <= int(stamp.tm_hour) < 6:
+                # 兜底：00:00-06:00 绝不写财务日程，一律记到当天 10:00
+                stamp = time.struct_time((
+                    stamp.tm_year, stamp.tm_mon, stamp.tm_mday, 10, 0, 0,
+                    stamp.tm_wday, stamp.tm_yday, stamp.tm_isdst,
+                ))
+            start = "%02d:%02d" % (stamp.tm_hour, stamp.tm_min)
+            end_min = stamp.tm_hour * 60 + stamp.tm_min + 10
+            if end_min >= 24 * 60:
+                # 23:5x 的财务条目跨零点：日程是当天表，end 回绕成 00:0x 比 start 还早，
+                # 日程校验会把它当坏数据；这里钳到当天最后一分钟。
+                end_min = 24 * 60 - 1
+            # 地点必须跟当前活动一致：约会中买单不能写成「在家买单」
+            place, zone = "家", ""
+            try:
+                act = amo.state.current_activity() or {}
+                place = str(act.get("place") or "家")
+                zone = str(act.get("zone") or "")
+            except Exception:
+                place, zone = "家", ""
             item = {
                 "start": start,
                 "end": "%02d:%02d" % (end_min // 60, end_min % 60),
                 "activity": "财务·" + str(kind),
-                "place": "家",
+                "place": place,
                 "category": "finance",
-                "detail": ("%s %s" % (kind, yuan(amount_cents))) + (("，" + note) if note else ""),
-                "event": "情绪由" + str(before) + "变为" + str(after),
+                "detail": ("%s %s 元" % (kind, facts.money(amount_cents))) + (("，" + note) if note else ""),
                 "subject": "bot",
             }
-            day = time.strftime("%Y-%m-%d")
+            if zone:
+                item["zone"] = zone
+            day = time.strftime("%Y-%m-%d", stamp)
             result = amo.state.add_schedule_item(day, item, source="finance", reason=kind)
             return bool(isinstance(result, dict) and result.get("changed"))
         except Exception as exc:
             isolated("finance.schedule", exc)
             return False
 
+    @staticmethod
+    def _diary_fallback(text):
+        """没有 LLM 时也别把账本数字抄进日记：工资只写一句人话。"""
+        raw = str(text or "").strip()
+        if "发工资" in raw or "工资结算" in raw:
+            return "今天发工资了，看到余额多了一点，心里踏实了些。"
+        return raw
+
     def _small_diary(self, amo, text):
         try:
-            amo.db.save_diary(time.strftime("%Y-%m-%d"), time.strftime("%H"), str(text))
+            amo.db.save_diary(time.strftime("%Y-%m-%d"), time.strftime("%H"),
+                              self._diary_fallback(text))
             return True
         except Exception as exc:
             isolated("finance.small_diary", exc)
@@ -312,12 +346,11 @@ class FinanceLink:
             return "未知余额"
 
     # ---------- 对外：入账 / 支出 / 交易 / 预警 ----------
-    async def income(self, amount_cents, reason, idem, salary=False):
+    async def income(self, amount_cents, reason, idem, salary=False, detail=None, when_ts=None):
         amo = self._amo()
         if amo is None:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
         steps = {}
-        before = self.mood()["word"]
         try:
             steps["wallet"] = bool(amo.wallet.credit(int(amount_cents), reason, idem))
         except Exception as exc:
@@ -328,20 +361,23 @@ class FinanceLink:
         level = income_level(int(amount_cents), salary=salary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"])
         after = self.mood()["word"]
-        steps["schedule"] = self._schedule(amo, "工资到账" if salary else "入账", amount_cents, before, after, reason)
-        steps["diary"] = self._small_diary(amo, "今天%s，%s。" % (
-            ("%s到账" % reason) if reason else "有一笔入账", level["word"] or "挺开心"))
-        when = time.strftime("%Y-%m-%d %H:%M")
-        if salary:
-            text = "%s 发工资 %s，发放后可用余额 %s，%s。" % (when, yuan(amount_cents), self._balance_text(amo), after)
+        if salary and when_ts is None:
+            # 工资固定记在当天 10:00：结算就算提前跑了，也不能显示成 00:00 到账
+            when_ts = _dt.datetime.now().replace(
+                hour=10, minute=0, second=0, microsecond=0).timestamp()
+        steps["schedule"] = self._schedule(
+            amo, "工资到账" if salary else "入账", amount_cents,
+            note=str(reason or ""), when_ts=when_ts)
+        balance = int(self.balance_cents() or 0)
+        if salary and isinstance(detail, dict):
+            # 记忆/小日记只留一句人话；金额明细在账本流水里，日记再由 LLM 改写成她的语气
+            text = "这个月发工资了，实发 %s 元，明细记在账本里。" % facts.money(int(amount_cents))
         else:
-            text = "%s 收到%s %s，入账后可用余额 %s，%s。" % (
-                when, reason or "一笔钱", yuan(amount_cents), self._balance_text(amo), after)
-        steps["memory"] = await self._tier("permanent" if salary else "long", text, idem + ":mem", tag="income")
-        if int(amount_cents) >= 500000:
-            steps["long_diary"] = self._long_diary(
-                amo, "今天%s，一共 %s。我从%s变成%s，心里踏实了不少。" % (
-                    reason or "收到一笔钱", yuan(amount_cents), before, after))
+            text = facts.ledger_fact("收入", int(amount_cents), balance,
+                                     item=str(reason or "入账"))
+        steps["diary"] = self.small_diary(text)
+        steps["memory"] = await self._tier("permanent" if salary else "long", text,
+                                           idem + ":mem", tag="income")
         return {"ok": bool(steps.get("wallet")), "mood": after, "steps": steps}
 
     @staticmethod
@@ -376,11 +412,11 @@ class FinanceLink:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
         steps = {}
         before = self.mood()["word"]
+        stored_reason = str(reason or "日常")
         try:
             cat, sub, item, trigger = self._expense_meta(reason)
-            stored_reason = reason
-            if "：" not in str(reason) and ":" not in str(reason):
-                stored_reason = (cat + "：" + item) if cat != "其他" else ("其他：" + str(reason or "日常"))
+            # 写库只存纯原因/物品名：严禁再拼「餐饮：/日常：/其他：」这类前缀（2026-11-15 用户要求）
+            stored_reason = str(item or reason or "日常").strip()
             steps["wallet"] = bool(amo.wallet.debit(
                 int(amount_cents), stored_reason, idem,
                 category=category or cat, sub_category=sub_category or sub,
@@ -403,15 +439,12 @@ class FinanceLink:
         level = expense_level(int(amount_cents), necessary=necessary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"]) if level["deltas"] else True
         after = self.mood()["word"]
+        text = facts.ledger_fact("支出", int(amount_cents), int(self.balance_cents() or 0),
+                                 item=stored_reason or reason)
         if necessary:
-            steps["schedule"] = self._schedule(amo, "支出", amount_cents, before, after, reason)
-        steps["diary"] = self._small_diary(amo, "今天%s，花了 %s。%s" % (
-            reason or "有笔开销", yuan(amount_cents),
-            reaction_line(level["word"] or after, idem)))
-        when = time.strftime("%Y-%m-%d %H:%M")
-        text = "%s %s 花了 %s，扣款后余额 %s。%s。" % (
-            when, reason or "一笔开销", yuan(amount_cents), self._balance_text(amo),
-            reaction_line(after, idem))
+            steps["schedule"] = self._schedule(amo, "支出", int(amount_cents),
+                                               note=str(reason or ""))
+        steps["diary"] = self.small_diary(text)
         if not quiet:
             steps["memory"] = await self._tier("long", text, idem + ":mem", tag="expense")
         try:
@@ -427,26 +460,20 @@ class FinanceLink:
         if amo is None:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
         steps = {}
-        before = self.mood()["word"]
         level = pnl_level(int(pnl_cents), float(ratio))
         steps["mood"] = self._nudge(amo, idem, level["deltas"]) if level["deltas"] else True
         after = self.mood()["word"]
+        text = facts.ledger_fact(
+            "交易盈利" if int(pnl_cents) >= 0 else "交易亏损", abs(int(pnl_cents)),
+            int(self.balance_cents() or 0),
+            item="%s 收益率 %+.2f%%" % (symbol or "交易", float(ratio) * 100))
+        steps["diary"] = self.small_diary(text)
         if abs(int(pnl_cents)) >= 100000:
-            steps["schedule"] = self._schedule(amo, "大额交易", pnl_cents, before, after, symbol)
-        steps["diary"] = self._small_diary(amo, "今天%s %s，%s。" % (
-            symbol or "交易",
-            ("赚了 " + yuan(pnl_cents)) if pnl_cents >= 0 else ("亏了 " + yuan(-pnl_cents)),
-            level["word"] or "没什么波动"))
-        when = time.strftime("%Y-%m-%d %H:%M")
-        text = "%s %s %s %s（%+.2f%%），%s。" % (
-            when, symbol or "交易", "实现盈利" if pnl_cents >= 0 else "实现亏损",
-            yuan(abs(int(pnl_cents))), float(ratio) * 100, after)
-        steps["memory"] = await self._tier("short", text, idem + ":mem", related=str(symbol or ""), tag="pnl")
-        if abs(int(pnl_cents)) >= 100000:
-            steps["long_diary"] = self._long_diary(
-                amo, "今天 %s %s %s，从%s变成%s。" % (
-                    symbol or "这只票", "赚了" if pnl_cents >= 0 else "亏了",
-                    yuan(abs(int(pnl_cents))), before, after))
+            steps["schedule"] = self._schedule(amo, "大额交易", pnl_cents,
+                                               note=str(symbol or ""))
+            steps["long_diary"] = self.small_diary(text)
+        steps["memory"] = await self._tier("short", text, idem + ":mem",
+                                           related=str(symbol or ""), tag="pnl")
         return {"ok": True, "mood": after, "steps": steps}
 
     async def borrow(self, amount_cents, reason, idem, months=12):
@@ -455,7 +482,6 @@ class FinanceLink:
         if amo is None:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
         steps = {}
-        before = self.mood()["word"]
         try:
             steps["wallet"] = bool(amo.wallet.credit(int(amount_cents), reason, idem))
         except Exception as exc:
@@ -463,10 +489,12 @@ class FinanceLink:
             steps["wallet"] = False
         steps["mood"] = self._nudge(amo, idem, {"委屈": 2, "焦虑": 3})
         after = self.mood()["word"]
-        steps["schedule"] = self._schedule(amo, "银行借款", amount_cents, before, after, "分 %d 个月还" % months)
-        steps["diary"] = self._small_diary(amo, "向银行借了 %s 周转，%s。" % (yuan(amount_cents), after))
-        text = "%s 向银行借了 %s 周转，分 %d 个月还，%s。" % (
-            time.strftime("%Y-%m-%d %H:%M"), yuan(amount_cents), months, after)
+        steps["schedule"] = self._schedule(amo, "银行借款", amount_cents,
+                                           note="分 %d 个月还" % months)
+        text = facts.ledger_fact("借款", int(amount_cents),
+                                 int(self.balance_cents() or 0),
+                                 item="分 %d 个月还" % months)
+        steps["diary"] = self.small_diary(text)
         steps["memory"] = await self._tier("permanent", text, idem + ":mem")
         return {"ok": bool(steps.get("wallet")), "mood": after, "steps": steps}
 
@@ -505,23 +533,94 @@ class FinanceLink:
                 pass
         return self._small_diary(amo, str(text))
 
-    def add_schedule(self, day, activity, detail="", place="家", category="leave"):
-        """往 amo 当天日程里追加一条（整天事项用 00:00–23:59）。"""
+    def add_schedule(self, day, activity, detail="", place="家", category="leave",
+                     start="00:00", end="23:59", zone="", status="leave"):
+        """往 amo 当天日程里追加一条。
+
+        默认是整天事项（00:00–23:59）；社交邀约要占真实时段，所以支持 14:00–17:00 这种区间。
+        zone 只用来给生图/此刻动作判定场景，不写死业务逻辑。
+        """
         amo = self._amo()
         if amo is None:
             return False
         try:
             item = {
-                "start": "00:00", "end": "23:59",
+                "start": str(start or "00:00"), "end": str(end or "23:59"),
                 "activity": str(activity), "place": str(place),
                 "category": str(category), "detail": str(detail or activity),
-                "subject": "bot", "status": "leave",
+                "subject": "bot", "status": str(status or "leave"),
             }
+            if zone:
+                item["zone"] = str(zone)
+            # 同一天同一时段、同一件事只留一条：重复接受同一条邀约不该堆出一排日程
+            schedule = getattr(getattr(amo, "state", None), "schedule", {}) or {}
+            for row in (schedule.get(str(day)) or []):
+                if not isinstance(row, dict):
+                    continue
+                if (str(row.get("start") or "") == item["start"]
+                        and str(row.get("end") or "") == item["end"]
+                        and str(row.get("activity") or "") == item["activity"]):
+                    return True
             result = amo.state.add_schedule_item(str(day), item, source="watch",
                                                  reason=str(activity))
             return bool(isinstance(result, dict) and result.get("changed", True))
         except Exception as exc:
             isolated("finance.schedule", exc)
+            return False
+
+
+    def schedule_windows(self, day):
+        """读 amo 当天日程里已有的时间段（社交冲突检测用）。"""
+        amo = self._amo()
+        if amo is None:
+            return []
+        try:
+            rows = (getattr(amo.state, "schedule", {}) or {}).get(str(day)) or []
+        except Exception:
+            return []
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            start, end = str(row.get("start") or ""), str(row.get("end") or "")
+            if not start or not end:
+                continue
+            out.append({"start": start, "end": end,
+                        "activity": str(row.get("activity") or ""),
+                        "category": str(row.get("category") or "")})
+        return out
+
+    def fatigue(self):
+        """疲惫值 0-100：读 amo 心情里的「疲惫」维度，生病/疲惫状态再拉高。"""
+        amo = self._amo()
+        if amo is None:
+            return 0
+        value = 0.0
+        try:
+            value = float((getattr(getattr(amo, "state", None), "mood", {}) or {}).get("疲惫", 0) or 0)
+        except Exception:
+            value = 0.0
+        try:
+            health = getattr(getattr(amo, "state", None), "health", {}) or {}
+            if str(health.get("status") or "") == "疲惫":
+                value = max(value, 60.0)
+        except Exception:
+            pass
+        return max(0, min(100, int(round(value))))
+
+    def set_current_action(self, action, until_ts=0, place="外面", zone="restaurant", category="social"):
+        """立刻刷新「此刻在干嘛」（她答应邀约后当天就在约会时用）。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        setter = getattr(getattr(amo, "state", None), "set_current_action", None)
+        if not callable(setter):
+            return False
+        try:
+            return bool(setter(str(action), float(until_ts or 0), place=str(place),
+                               zone=str(zone or "restaurant"), category=str(category or "social")))
+        except Exception as exc:
+            isolated("finance.current_action", exc)
             return False
 
     def long_diary(self, text):
@@ -543,7 +642,9 @@ class FinanceLink:
         level = low_balance_level(int(need_cents))
         steps = {"mood": self._nudge(amo, idem, level["deltas"])}
         after = self.mood()["word"]
-        steps["schedule"] = self._schedule(amo, "余额不足", int(need_cents), before, after, "还差 " + yuan(need_cents))
+        steps["schedule"] = self._schedule(
+            amo, "余额不足", int(need_cents),
+            note="（%s→%s）还差 %s" % (before, after, yuan(need_cents)))
         steps["diary"] = self._small_diary(amo, "余额不够了，还差 %s，%s。" % (yuan(need_cents), level["word"]))
         text = "%s 余额不足，还差 %s，%s。" % (time.strftime("%Y-%m-%d %H:%M"), yuan(need_cents), after)
         steps["memory"] = await self._tier("permanent", text, idem + ":mem")

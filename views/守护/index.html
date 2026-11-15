@@ -258,8 +258,8 @@
       <div class="tile"><div class="k">人情债</div><div class="v" id="statDebt">0</div><div class="s">应收合计</div></div>
     </div>
     <div class="card">
-      <div class="card-h"><h2>最近关系动态</h2><span class="tag">约饭 · 送礼 · 吵架 · 和好</span></div>
-      <div class="empty">还没有关系事件<br><span>事件流水接上后，每次亲近和冲突都会留痕</span></div>
+      <div class="card-h"><h2>最近关系动态</h2><span class="tag" id="socialDynTag">约饭 · 送礼 · 吵架 · 和好</span></div>
+      <div class="kv" id="socialEvents"><div class="item"><div class="k">加载中</div><div class="v">—</div></div></div>
     </div>
   </section>
 
@@ -764,9 +764,10 @@
       (d.npcs || []).forEach(function (n) {
         var aff = n.affinity || 0;
         var owed = n.borrowed_from_her ? (" · 欠我 ¥" + (n.borrowed_from_her / 100).toFixed(2)) : "";
+        var sub = [n.last_event, n.status].filter(Boolean).join(" · ") || "最近没动静";
         html += '<div class="item"><div class="k">' + n.name + '（' + n.relation + '）</div>'
           + '<div class="v">好感 ' + aff + ' / 100</div>'
-          + '<div class="s">' + (n.last_event || "最近没动静") + owed + '</div></div>';
+          + '<div class="s">' + sub + owed + '</div></div>';
       });
       box.innerHTML = html || "还没有 NPC，点刷新试试";
       var friends = (d.npcs || []).filter(function (n) { return n.circle === "friend"; }).length;
@@ -779,7 +780,68 @@
         return r.npc + " 欠 ¥" + (r.amount_cents / 100).toFixed(2);
       });
       q("socialRecv").textContent = recv.length ? ("应收：" + recv.join("；")) : "应收：暂无";
+      renderSocialEvents(d.events, d.pending);
     }).catch(function () { box.textContent = "社交接口异常"; });
+  }
+  function renderSocialEvents(evs, pending) {
+    var esc = function (v) {
+      return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    };
+    var box = q("socialEvents");
+    var tag = q("socialDynTag");
+    if (tag) {
+      tag.textContent = (pending && pending.npc)
+        ? ("等她回：" + esc(pending.npc) + " 约" + esc(pending.label || "她"))
+        : "约饭 · 送礼 · 吵架 · 和好";
+    }
+    if (!box) return;
+    var list = evs || [];
+    var seen = {};
+    list = list.filter(function (e) {
+      var key = String(e.id || "") + "|" + String((e.payload || {}).text || "") + "|" + String(e.kind || "");
+      if (seen[key]) return false;
+      seen[key] = 1;
+      return true;
+    });
+    if (!list.length) {
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1">还没有关系事件<br><span>她答应的邀约、收到和花出的钱都会记在这里</span></div>';
+      return;
+    }
+    var pad = function (n) { return ("0" + n).slice(-2); };
+    var label = function (kind) {
+      var k = String(kind || "");
+      if (k.indexOf("invite") >= 0) return "邀约";
+      if (k.indexOf("accept") >= 0) return "答应了";
+      if (k.indexOf("reject") >= 0) return "婉拒";
+      if (k.indexOf("expire") >= 0) return "没回";
+      if (k.indexOf("red") >= 0) return "红包";
+      if (k.indexOf("repay") >= 0) return "还钱";
+      if (k.indexOf("default") >= 0) return "赖账";
+      if (k.indexOf("criticism") >= 0) return "被批评";
+      return "动态";
+    };
+    box.innerHTML = list.map(function (e) {
+      var p = e.payload || {};
+      var when = e.day || "";
+      try {
+        var t = new Date((Number(e.created_at) || 0) * 1000);
+        when = pad(t.getMonth() + 1) + "-" + pad(t.getDate()) + " " + pad(t.getHours()) + ":" + pad(t.getMinutes());
+      } catch (err) { }
+      var text = e.display || p.text || p.fallback || "";
+      if (!text) {
+        if (String(e.kind || "").indexOf("invite") >= 0) {
+          text = (p.npc || "") + (p.place ? (" 约你去" + p.place + (p.label ? " " + p.label : "")) : " 发来一条邀约");
+        } else {
+          text = (p.npc || "") + " " + (p.status || "");
+        }
+      }
+      return '<div class="item"><div class="k">' + esc(p.npc || "社交") + '</div>'
+        + '<div class="v" style="font-size:13px;font-weight:500">' + esc(text) + '</div>'
+        + '<div class="s">' + esc(when) + '</div>'
+        + ((p.day && p.start) ? ('<div class="s">对应日程：' + esc(p.day) + ' '
+          + esc(p.start) + '-' + esc(p.end || "") + ' ' + esc(p.topic || "") + '</div>') : '')
+        + '</div>';
+    }).join("");
   }
   function renderMedical() {
     var box = q("medicalBox");
@@ -867,6 +929,21 @@
     box.classList.add("show");
     q("expenseBtn").textContent = "收起日常支出明细";
     box.textContent = "读取中…";
+    var LEDGER_PREFIX = /^(?:【[^】]{1,10}】\s*)?(?:餐饮|日常|其他|交通|购物|人情|保险|固定账单|夜宵|早餐|午餐|晚餐|奶茶|打车|地铁|衣服|礼物|随礼|房租|工资|收入|支出|退款|网购|存款|取款|搬家)\s*[：:]\s*/;
+    function cleanLedgerLabel(text) {
+      var s = String(text == null ? "" : text);
+      s = s.replace(/系统误记（微型事件误触发）[，,]?\s*原路退回/g, "退款")
+           .replace(/微型事件误触发/g, "小插曲")
+           .replace(/系统误记/g, "退款")
+           .replace(/原路退回/g, "退款")
+           .replace(/JIT[:：]?/g, "");
+      for (var i = 0; i < 3; i++) {
+        var next = s.replace(LEDGER_PREFIX, "").replace(/^[：:]\s*/, "");
+        if (next === s) break;
+        s = next;
+      }
+      return s.trim() || "一笔花销";
+    }
     apiGet("ledger").then(function (d) {
       var items = (d && d.items) || [];
       var groups = {};
@@ -884,8 +961,9 @@
           var hh = ("0" + when.getHours()).slice(-2) + ":" + ("0" + when.getMinutes()).slice(-2);
           var amt = (Math.abs(it.delta_cents || 0) / 100).toFixed(2);
           var sign = (it.delta_cents || 0) < 0 ? "-" : "+";
+          var label = cleanLedgerLabel(it.item_name || it.reason || "一笔花销");
           html += '<div style="margin:4px 0">' + hh + " "
-            + esc(it.sub_category || "") + "：" + esc(it.item_name || it.reason || "")
+            + esc(label)
             + " (" + sign + amt + "元)</div>";
         });
       });
@@ -895,7 +973,7 @@
         box.classList.remove("show");
         q("expenseBtn").textContent = "日常支出明细";
       };
-    }).catch(function () { box.textContent = "流水接口异常"; });
+    }).catch(function () { box.textContent = "流水暂时读不到，稍后再看"; });
   });
   q("briefBtn").addEventListener("click", function () {
     var b = q("brief");

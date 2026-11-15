@@ -106,10 +106,11 @@ def test_settle_pays_net_and_writes_memory_and_diary():
     sal.set_base(680000)
     sal.add_item("2026-11", "bonus", "全勤奖", 30000)
     sal.add_item("2026-11", "deduction", "迟到/早退", 5000)
-    result = asyncio.run(sal.settle(dt.date(2026, 11, 15), "2026-11"))
+    result = asyncio.run(sal.settle(dt.date(2026, 11, 16), "2026-11"))
     assert result["paid"] == 680000 + 30000 - 5000
     assert fin.incomes == [(705000, "工资", True)]
-    assert fin.memories and fin.diaries
+    assert fin.diaries and "发工资" in fin.diaries[-1]
+    assert "狂喜" not in fin.diaries[-1]
     assert repo.settled("2026-11", "salary")
 
 
@@ -117,17 +118,17 @@ def test_settle_zero_net_writes_white_work_month():
     repo, fin, sal = make()
     sal.set_base(300000)
     sal.add_item("2026-11", "deduction", "绩效不达标(100%)", -300000)
-    result = asyncio.run(sal.settle(dt.date(2026, 11, 15), "2026-11"))
+    result = asyncio.run(sal.settle(dt.date(2026, 11, 16), "2026-11"))
     assert result["zero"] is True and result["paid"] == 0
     assert fin.incomes == []
-    assert "白干" in fin.diaries[-1]
+    assert "无入账" in fin.diaries[-1]
     assert repo.settled("2026-11", "salary")
 
 
 def test_deduction_triggers_thrifty_and_sad_mood():
     repo, fin, sal = make()
     sal.add_item("2026-11", "deduction", "事假一天", -30000)
-    asyncio.run(sal.settle(dt.date(2026, 11, 15), "2026-11"))
+    asyncio.run(sal.settle(dt.date(2026, 11, 16), "2026-11"))
     assert sal.thrifty_active(dt.date(2026, 11, 17)) is True
     assert sal.thrifty_active(dt.date(2027, 1, 1)) is False
     assert any("委屈" in d for d in fin.moods)
@@ -136,7 +137,7 @@ def test_deduction_triggers_thrifty_and_sad_mood():
 def test_bonus_triggers_happy_mood_without_thrifty():
     repo, fin, sal = make()
     sal.add_item("2026-11", "bonus", "项目超额完成", 30000)
-    asyncio.run(sal.settle(dt.date(2026, 11, 15), "2026-11"))
+    asyncio.run(sal.settle(dt.date(2026, 11, 16), "2026-11"))
     assert sal.thrifty_until() == ""
     assert any("开心" in d for d in fin.moods)
 

@@ -6,11 +6,16 @@ import datetime as _dt
 import json
 
 try:
-    from ..utils.helpers import city_factor, stable_int
+    from ..utils.helpers import stable_int
     from .city import current_city, factor_of
 except ImportError:
-    from utils.helpers import city_factor, stable_int
+    from utils.helpers import stable_int
     from services.city import current_city, factor_of
+
+try:  # 包模式优先
+    from ..guard import isolated
+except ImportError:  # 离线测试 / 顶层加载
+    from guard import isolated
 
 SHOP_MALL = (
     ("一条绿色碎花连衣裙", "skirt", "day", "绿色"),
@@ -33,6 +38,9 @@ def _amo(plugin):
 
 async def tick(plugin, now=None):
     now = now or _dt.datetime.now()
+    # 逛街/交通只发生在白天：凌晨 0 点抽到"逛街交通"是排程 bug，不是生活。
+    if not (9 <= int(now.hour) < 22):
+        return None
     amo = _amo(plugin)
     finance = getattr(plugin, "finance", None)
     repo = getattr(plugin, "finance_repo", None)
@@ -43,13 +51,21 @@ async def tick(plugin, now=None):
     except Exception:
         reason = ""
     if not reason:
+        try:
+            early_until = str(repo.meta_get("salary_early_until", "") or "") if repo is not None else ""
+        except Exception:
+            early_until = ""
+        # 提前发工资后的周末：主动去逛街犒劳自己
+        if early_until and now.date().isoformat() <= early_until and now.weekday() >= 5:
+            reason = "提前发工资，周末犒劳自己"
+    if not reason:
         return None
     day = now.date().isoformat()
     try:
         if repo is not None and repo.meta_get("shopping:" + day, False):
             return None
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("shopping_engine.tick", exc)
     cash = int(finance.balance_cents() or 0)
     try:
         factor = float(factor_of(current_city(plugin)) or 1.0)
@@ -77,12 +93,12 @@ async def tick(plugin, now=None):
         item = {"name": name, "color": color, "category": cat,
                 "time_slot": slot, "price": buy // 100}
         try:
-            repo.meta_set("shop:pending", json.dumps({
+            repo.meta_set("shop:pending", json.dumps({  # type: ignore[union-attr]
                 "name": name, "color": color, "category": cat, "time_slot": slot,
                 "price": buy, "cash": cash, "due": now.timestamp() + 15 * 60,
                 "created": now.timestamp()}, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.tick.2", exc)
         try:
             if cash < buy:
                 await amo.push_to_owner(
@@ -95,8 +111,8 @@ async def tick(plugin, now=None):
             if hasattr(amo, "note_shopping_pending"):
                 amo.note_shopping_pending("你正在商场试%s，等老公回复，语气要充满期待。" % name,
                                           now.timestamp() + 15 * 60)
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.tick.3", exc)
     try:
         if repo is not None:
             repo.meta_set("shopping:" + day, "1")
@@ -110,18 +126,18 @@ async def tick(plugin, now=None):
                                "name": item["name"], "color": item["color"],
                                "price": item["price"], "cash": cash - buy})
                 repo.meta_set("shop:events", json.dumps(events[-20:], ensure_ascii=False))
-    except Exception:
-        pass
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("shopping_engine.tick.4", exc)
+    except Exception as exc:
+        isolated("shopping_engine.tick.5", exc)
     if finance is not None:
         try:
             if buy:
                 finance.small_diary("今天%s，试了一件%s，等老公点头再买，好期待！" % (reason, item["name"] if item else "衣服"))
             else:
                 finance.small_diary("今天%s，只逛不买，看到一条好漂亮的裙子但买不起，好难过。" % reason)
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.tick.6", exc)
     return {"reason": reason, "item": item, "spent": spent}
 
 
@@ -146,8 +162,8 @@ async def flush(plugin, now=None):
     if pending and float(pending.get("due") or 0) <= now.timestamp():
         try:
             await amo.push_to_owner("算啦，你肯定在忙，我先放回衣架了。")
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.flush", exc)
         _clear_pending(repo)
     events = _pending_events(repo)
     keep, sent = [], []
@@ -177,8 +193,8 @@ async def flush(plugin, now=None):
             keep.append(event)
     try:
         repo.meta_set("shop:events", json.dumps(keep[-20:], ensure_ascii=False))
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("shopping_engine.flush.2", exc)
     return {"sent": sent}
 
 
@@ -195,8 +211,8 @@ def _pending_order(repo):
 def _clear_pending(repo):
     try:
         repo.meta_set("shop:pending", {})
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("shopping_engine._clear_pending", exc)
 
 
 async def handle_reply(plugin, text, now=None):
@@ -219,16 +235,16 @@ async def handle_reply(plugin, text, now=None):
         try:
             finance.nudge_mood({"委屈": 6, "开心": -5}, "shop:reject:%s" % int(now.timestamp()))
             await amo.push_to_owner("好吧，听你的，那不买了……")
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.handle_reply", exc)
         return {"ok": True, "bought": False}
     if yes:
         cash = int(finance.balance_cents() or 0)
         if cash < buy:
             try:
                 await amo.push_to_owner("啊哦，我的钱不够了，老公你能转我一点吗？")
-            except Exception:
-                pass
+            except Exception as exc:
+                isolated("shopping_engine.handle_reply.2", exc)
             return {"ok": False, "reason": "insufficient"}
         try:
             res = await finance.expense(buy, "买衣服：%s" % pending.get("name"),
@@ -240,14 +256,14 @@ async def handle_reply(plugin, text, now=None):
         try:
             if hasattr(amo, "note_purchase"):
                 amo.note_purchase(pending.get("name"), buy)
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.handle_reply.3", exc)
         try:
             hook = getattr(finance, "furniture_bought", None)
             if callable(hook):
                 hook(pending.get("name"))
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.handle_reply.4", exc)
         try:
             amo.add_closet_item({"name": pending.get("name"), "color": pending.get("color"),
                                  "category": pending.get("category"), "time_slot": pending.get("time_slot"),
@@ -256,16 +272,16 @@ async def handle_reply(plugin, text, now=None):
             await finance.permanent_memory("我买了%s（%s），%d 元。" % (pending.get("name"), pending.get("color"), buy // 100),
                                            "shop:pending:%s:mem" % int(pending.get("created") or 0))
             await amo.push_to_owner("谢谢老公！我买啦，等我回家穿给你看~")
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping_engine.handle_reply.5", exc)
         _clear_pending(repo)
         try:
             events = _pending_events(repo)
             events.append({"due": now.timestamp() + 60 * 60, "kind": "home",
                            "name": pending.get("name"), "color": pending.get("color"),
                            "price": buy // 100, "cash": cash - buy})
-            repo.meta_set("shop:events", json.dumps(events[-20:], ensure_ascii=False))
-        except Exception:
-            pass
+            repo.meta_set("shop:events", json.dumps(events[-20:], ensure_ascii=False))  # type: ignore[union-attr]
+        except Exception as exc:
+            isolated("shopping_engine.handle_reply.6", exc)
         return {"ok": True, "bought": True}
     return None

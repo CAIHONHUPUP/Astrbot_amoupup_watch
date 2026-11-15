@@ -67,9 +67,18 @@ async def social_reply(plugin, text):
         key = table.get(arg)
         if key is None:
             return "支持的险种：e生保 / 医无忧 / 金钟罩（意外险）/ 重疾险 / 交强险 / 商业车险 / 家财险"
-        if key in ("交强险", "商车险") and not getattr(plugin, "has_car", False):
+        prop = getattr(plugin, "finance_property", None)
+        info = {}
+        if prop is not None and callable(getattr(prop, "state", None)):
+            try:
+                info = prop.state() or {}
+            except Exception:
+                info = {}
+        has_car = bool(info.get("has_car", getattr(plugin, "has_car", False)))
+        has_house = bool(info.get("has_house", getattr(plugin, "has_house", False)))
+        if key in ("交强险", "商车险") and not has_car:
             return "她现在没有车，不用买车险。"
-        if key == "家财险" and not getattr(plugin, "has_house", False):
+        if key == "家财险" and not has_house:
             return "她现在没有房，不用买家财险。"
         try:
             from .insurance_engine import build_insurance
@@ -98,7 +107,7 @@ async def social_reply(plugin, text):
         fn = table.get(arg)
         if fn is None:
             return "可选：/外出 父母、/外出 逛街、/外出 旅游"
-        result = await fn()
+        result = await fn()  # type: ignore[operator]
         return result.get("text") or ("没去成（%s）" % result.get("reason"))
     if text.startswith(("/赞助", "赞助")):
         try:
@@ -122,27 +131,52 @@ async def social_reply(plugin, text):
         fn = table.get(arg)
         if fn is None:
             return "没这个事件，可选：随礼 / 红包 / 聚餐 / 借钱 / 批评"
-        result = await fn()
+        result = await fn()  # type: ignore[operator]
         return result.get("text") or ("好了" if result.get("ok") else "这次没触发（%s）" % result.get("reason"))
     return ""
 
+def invite_block(plugin):
+    """待回邀约的客观事实（没有邀约就返回空串）。系统只给事实，不替她决定。"""
+    engine = _engine(plugin)
+    if engine is None:
+        return ""
+    try:
+        invite = engine.pending_invite()
+        if not invite:
+            return ""
+        return str(engine.invite_facts(invite) or "")
+    except Exception as exc:
+        isolated("social.invite_inject", exc)
+        return ""
+
+
 def inject_request(plugin, request):
-    """把【关系】一行塞进 LLM 请求（临时 part，不改 system prompt 缓存）。"""
+    """把【关系】和【待回邀约】一起塞进 LLM 请求（直接拼 system_prompt 最稳）。"""
     line = prompt_line(plugin)
-    if not line or request is None:
+    block = invite_block(plugin)
+    text = "\n".join(item for item in (line, block) if item)
+    if not text or request is None:
         return
     try:
         # AstrBot 4.29 没有 TextPart（api/core 都导不出），旧写法每次注入都 ImportError，
         # 关系上下文实际从没进过模型；直接拼 system_prompt 最稳。
-        request.system_prompt = str(getattr(request, "system_prompt", "") or "") + "\n" + line
+        request.system_prompt = str(getattr(request, "system_prompt", "") or "") + "\n" + text
     except Exception as exc:
         isolated("social.llm_inject", exc)
 
 
 def prompt_line(plugin):
-    """给 LLM 的一行关系上下文（on_llm_request 注入用，不改 amo 代码）。"""
+    """给 LLM 的关系上下文：7 人名单 + 每人当前状态（on_llm_request 注入用，不改 amo 代码）。"""
     engine = _engine(plugin)
     if engine is None:
         return ""
-    engine.ensure_seed()
-    return "【关系】" + engine.relation_line()
+    try:
+        engine.ensure_seed()
+    except Exception as exc:
+        isolated("social.prompt_seed", exc)
+    try:
+        from .npc_roster import ROSTER_LINE
+    except ImportError:
+        from services.npc_roster import ROSTER_LINE
+    parts = [engine.relation_line(), ROSTER_LINE]
+    return "\n".join(item for item in parts if item)

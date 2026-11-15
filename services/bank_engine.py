@@ -47,9 +47,13 @@ class BankEngine:
         if amount <= 0:
             return {"ok": False, "reason": "zero"}
         now = now or _dt.datetime.now()
+        # 幂等键带上「分钟」：同一天存两次同样金额是两笔真实操作，
+        # 以前整天共用一个键，第二次会被钱包判成重复扣款（rowcount=0）→ 报「余额不足」，
+        # 钱没进银行；带分钟后只有同一分钟内的重试才会被拦。
         res = await self.finance.expense(
             amount, "存款：%s" % ("活期" if not term_months else "定期%d个月" % int(term_months)),
-            "bank:dep:%s:%s:%s" % (now.date().isoformat(), amount, int(term_months or 0)),
+            "bank:dep:%s:%s:%s:%02d%02d" % (now.date().isoformat(), amount,
+                                            int(term_months or 0), now.hour, now.minute),
             necessary=True)
         if not isinstance(res, dict) or not res.get("ok"):
             return {"ok": False, "reason": "insufficient"}
@@ -80,6 +84,8 @@ class BankEngine:
 
     async def withdraw(self, amount_cents, term_months=None, now=None):
         amount = int(amount_cents or 0)
+        if amount <= 0:  # 负数会让活期余额不减反增，等于凭空造钱
+            return {"ok": False, "reason": "bad_amount"}
         now = now or _dt.datetime.now()
         data = self._data()
         if term_months is None:
@@ -92,6 +98,11 @@ class BankEngine:
             active = [r for r in rows if str(r.get("status") or "active") != "completed"]
             if not active:
                 return {"ok": False, "reason": "no_fixed"}
+            wanted = int(term_months or 0)
+            if wanted:
+                matched = [r for r in active if int(r.get("months") or 0) == wanted]
+                if matched:
+                    active = matched
             row = active[0]
             amount = min(amount, int(row["amount"]))
             early = now.date().isoformat() < str(row.get("end") or "")
@@ -108,11 +119,14 @@ class BankEngine:
                 rows.remove(row)
             data["fixed"] = rows
             data["current"] = self.current_cents() + amount + interest
-        self._save(data)
-        await self.finance.income(
+        # 先入账再落盘：入账失败（余额/幂等冲突）时绝不能先扣银行，否则钱凭空消失
+        result = await self.finance.income(
             amount, "取款：%s" % ("活期" if term_months is None else "定期"),
             "bank:wd:%s:%s:%s" % (now.date().isoformat(), amount,
                                   "cur" if term_months is None else int(term_months)))
+        if not isinstance(result, dict) or not result.get("ok"):
+            return {"ok": False, "reason": "credit_failed"}
+        self._save(data)
         if penalty:
             self.finance.nudge_mood({"委屈": 10}, "bank:wd:penalty")
             self.finance.long_diary(stable_int("bank-wd:", 0, 1) and

@@ -17,7 +17,7 @@ GIFT_POOL = {
 
 def _birthdays(plugin):
     repo = _repo(plugin)
-    raw = {}
+    raw = {}  # type: ignore[var-annotated]
     try:
         raw = repo.meta_get("npc_birthdays", {}) or {}
         if isinstance(raw, str):
@@ -88,7 +88,7 @@ async def tick(plugin, now=None):
     amo = _amo(plugin)
     if repo is None or finance is None:
         return None
-    out = {}
+    out = {}  # type: ignore[var-annotated]
     for name, md, delta in upcoming(plugin, now):
         year = now.year
         try:

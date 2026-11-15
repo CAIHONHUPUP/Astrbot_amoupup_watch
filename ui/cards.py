@@ -32,6 +32,44 @@ class CardMixin:
 
     def _snapshot_real(self) -> dict:
         cash = self.finance.balance_cents() or 0
+        positions, market_value, total_pnl, trades = self._snapshot_holdings()
+        loans, debt, monthly, rate, mood, decision, help_state = self._snapshot_loans()
+        life, market = self._snapshot_life()
+        prop, assets_value = self._snapshot_property(life)
+        self._snapshot_salary(life)
+        self._snapshot_expense(life)
+        return {
+            "mode": "real",
+            "wallet": {"total": (cash + market_value + assets_value - debt) / 100.0,
+                       "available": cash / 100.0,
+                       "assets": assets_value / 100.0, "liabilities": debt / 100.0,
+                       "withdrawable": (self.finance.withdrawable_cents() or 0) / 100.0,
+                       "market_value": market_value / 100.0,
+                       "today_pnl": total_pnl / 100.0,
+                       "today_pct": (total_pnl / max(1, market_value - total_pnl) * 100.0)},
+            "positions": positions,
+            "trades": trades,
+            "life": life,
+            "mood": {"score": mood.get("score"), "dominant": mood.get("dominant"),
+                     "last_event": ""},
+            "market": market,
+            "bank": {"debt": debt / 100.0, "monthly": monthly / 100.0, "rate": rate,
+                     "limit": 0, "items": loans, "note": ""},
+            "decision": decision,
+            "help": help_state,
+            "plan": {"deposit": cash / 100.0, "invest_cap": 50,
+                     "house": {"price": prop.get("house_price") or 0,
+                               "down_pct": prop.get("down_pct") or 30,
+                               "years": prop.get("house_years") or [10, 20, 30],
+                               "monthly": prop.get("mortgage") or 0,
+                               "owned": bool(prop.get("has_house"))},
+                     "car": {"price": prop.get("car_price") or 0, "years": 5,
+                             "owned": bool(prop.get("has_car"))},
+                     "rule": "她不会买买不起的；投资不超过存款 50%"},
+        }
+
+    def _snapshot_holdings(self):
+        """持仓与交易：按持仓行算市值/浮盈，并取最近 20 笔交易。"""
         rows = []
         if self.finance_repo is not None:
             try:
@@ -72,6 +110,10 @@ class CardMixin:
                     })
             except Exception as exc:
                 isolated("finance.snapshot.trades", exc)
+        return positions, market_value, total_pnl, trades
+
+    def _snapshot_loans(self):
+        """贷款与决策：贷款余额/月供/利率、心情、最近决策与求助状态。"""
         loans = []
         if self.finance_repo is not None:
             try:
@@ -96,6 +138,10 @@ class CardMixin:
                 help_state["prompt"] = self.finance_help.prompt_text()
         except Exception:
             help_state = {}
+        return loans, debt, monthly, rate, mood, decision, help_state
+
+    def _snapshot_life(self):
+        """生活账单：结算记录 + 钱包流水聚合，附带决策时点。"""
         # 生活账单 / 决策时点：从自己库里的结算记录 + amo 的钱包流水聚合，
         # 不再写死 0（以前面板显示房租 0，但钱其实早扣了）。
         try:
@@ -112,7 +158,10 @@ class CardMixin:
             life = {"salary": 0, "salary_day": 15, "next_salary": "", "rent": 0,
                     "rent_day": 1, "utilities": 0, "month_expense": 0}
             market = {"checks": 0, "limit": 3, "last": "", "source": "腾讯 qt.gtimg.cn"}
-        # 固定资产 / 房贷车贷：总资产 = 现金 + 持仓 + 房产 + 车 − 未还本金
+        return life, market
+
+    def _snapshot_property(self, life):
+        """固定资产 / 房贷车贷：总资产 = 现金 + 持仓 + 房产 + 车 − 未还本金。"""
         prop = {}
         assets_value = 0
         try:
@@ -132,7 +181,10 @@ class CardMixin:
                         life[key] = prop[key]
         except Exception as exc:
             isolated("finance.snapshot.property", exc)
-        # 工资：基本 + 奖金 − 扣款 = 实发（持久化的 base_salary_cents 为准）
+        return prop, assets_value
+
+    def _snapshot_salary(self, life):
+        """工资：基本 + 奖金 − 扣款 = 实发（持久化的 base_salary_cents 为准）。"""
         try:
             if self.finance_salary is not None:
                 today = _dt.date.today()
@@ -152,7 +204,9 @@ class CardMixin:
                 life["thrifty_until"] = self.finance_salary.thrifty_until()
         except Exception as exc:
             isolated("finance.snapshot.salary", exc)
-        # 本月日常开销：按分类汇总（餐饮/交通/日用/人情/冲动）
+
+    def _snapshot_expense(self, life):
+        """本月日常开销：按分类汇总（餐饮/交通/日用/人情/冲动）。"""
         try:
             if self.finance_expense is not None:
                 summ = self.finance_expense.month_summary()
@@ -164,35 +218,6 @@ class CardMixin:
                     for item in summ.get("categories") or []]
         except Exception as exc:
             isolated("finance.snapshot.expense", exc)
-        return {
-            "mode": "real",
-            "wallet": {"total": (cash + market_value + assets_value - debt) / 100.0,
-                       "available": cash / 100.0,
-                       "assets": assets_value / 100.0, "liabilities": debt / 100.0,
-                       "withdrawable": (self.finance.withdrawable_cents() or 0) / 100.0,
-                       "market_value": market_value / 100.0,
-                       "today_pnl": total_pnl / 100.0,
-                       "today_pct": (total_pnl / max(1, market_value - total_pnl) * 100.0)},
-            "positions": positions,
-            "trades": trades,
-            "life": life,
-            "mood": {"score": mood.get("score"), "dominant": mood.get("dominant"),
-                     "last_event": ""},
-            "market": market,
-            "bank": {"debt": debt / 100.0, "monthly": monthly / 100.0, "rate": rate,
-                     "limit": 0, "items": loans, "note": ""},
-            "decision": decision,
-            "help": help_state,
-            "plan": {"deposit": cash / 100.0, "invest_cap": 50,
-                     "house": {"price": prop.get("house_price") or 0,
-                               "down_pct": prop.get("down_pct") or 30,
-                               "years": prop.get("house_years") or [10, 20, 30],
-                               "monthly": prop.get("mortgage") or 0,
-                               "owned": bool(prop.get("has_house"))},
-                     "car": {"price": prop.get("car_price") or 0, "years": 5,
-                             "owned": bool(prop.get("has_car"))},
-                     "rule": "她不会买买不起的；投资不超过存款 50%"},
-        }
 
     def _finance_snapshot(self, demo: bool = False) -> dict:
         view = self._finance_snapshot_raw(demo)
@@ -207,7 +232,13 @@ class CardMixin:
                 self.bank = bank
             if isinstance(view, dict) and bank is not None:
                 cur, fix = int(bank.current_cents()), int(bank.fixed_cents())
-                view["bank"] = {"current_cents": cur, "fixed_cents": fix}
+                bank_view = view.get("bank") if isinstance(view.get("bank"), dict) else {}
+                bank_view.update({"current_cents": cur, "fixed_cents": fix})
+                view["bank"] = bank_view
+                wallet = view.get("wallet")
+                if isinstance(wallet, dict) and "total" in wallet:
+                    # 现金已经扣掉存进银行的那部分，总资产要把活期+定期加回来
+                    wallet["total"] = float(wallet.get("total") or 0) + (cur + fix) / 100.0
                 if "total_cents" in view:
                     view["total_cents"] = int(view.get("total_cents") or 0) + cur + fix
         except Exception as exc:
@@ -333,7 +364,7 @@ class CardMixin:
             seconds = max(0.1, min(seconds, 60.0))
             mode = (args[2].lower() if len(args) > 2 else "good")
             if mode == "bad":
-                time.sleep(seconds)          # 反例：故意卡住事件循环
+                time.sleep(seconds)          # block-io-ok 反例：故意卡住事件循环（仅 allow_test_commands 可达）
             else:
                 await self.runtime.run_io(time.sleep, seconds)
             return "busy %.1fs mode=%s lag=%s" % (seconds, mode, self.runtime.lag_stats())

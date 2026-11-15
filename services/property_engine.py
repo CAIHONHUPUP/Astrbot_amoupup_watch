@@ -19,11 +19,11 @@ import hashlib
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import (car_price_cents as base_car_price, city_factor,
+    from ..utils.helpers import (car_price_cents as base_car_price,
                                  house_price_cents as base_house_price)
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
-    from utils.helpers import (car_price_cents as base_car_price, city_factor,
+    from utils.helpers import (car_price_cents as base_car_price,
                               house_price_cents as base_house_price)
 from .city import current_city, factor_of
 

@@ -29,8 +29,8 @@ async def tick(plugin, now=None):
     except Exception:
         return None
     out = {}
-    # 夜宵：00:30-05:00，饿且有钱，每小时最多一次
-    late_snack = (now.hour == 0 and now.minute >= 30) or 1 <= now.hour < 5
+    # 夜宵只在 22:00-24:00：00:00-06:00 只允许失眠/起夜/喝水，禁止消费
+    late_snack = 22 <= now.hour < 24
     if state.get("active") and late_snack:
         key = "late_snack:%s:%02d" % (now.date().isoformat(), now.hour)
         try:
@@ -61,7 +61,7 @@ async def tick(plugin, now=None):
                     except Exception:
                         pass
                 try:
-                    repo.meta_set(key, "1")
+                    repo.meta_set(key, "1")  # type: ignore[union-attr]
                 except Exception:
                     pass
                 out["snack"] = amount
@@ -86,7 +86,7 @@ async def tick(plugin, now=None):
                         pass
                     out["fine"] = fine
             try:
-                repo.meta_set("late_fine:" + now.date().isoformat(), "1")
+                repo.meta_set("late_fine:" + now.date().isoformat(), "1")  # type: ignore[union-attr]
             except Exception:
                 pass
     return out

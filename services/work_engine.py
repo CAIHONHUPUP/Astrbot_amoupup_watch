@@ -18,9 +18,11 @@ import hashlib
 try:
     from ..guard import isolated
     from ..utils.helpers import stable_int, parse_day
+    from . import bill_flow
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
     from utils.helpers import parse_day
+    import services.bill_flow as bill_flow
 
 DEFAULT_BASE_CENTS = 680000          # 6800 元
 BASE_MIN_CENTS, BASE_MAX_CENTS = 300000, 2000000   # 3000–20000 元
@@ -257,6 +259,19 @@ class FinanceSalary:
 
     # ---------- 结算 ----------
     async def settle(self, now, period):
+        # 发薪日：15 号遇周末/节假日顺延到下一个工作日；非工作日绝不结算。
+        base = now.date() if hasattr(now, "date") else now
+        holiday_set = bill_flow.holidays(self.plugin)
+        pay_day = bill_flow.salary_pay_day(base, holiday_set)
+        if base < pay_day or not bill_flow.is_workday(base, holiday_set):
+            return {"ok": False, "reason": "not_pay_time", "summary": None}
+        # 工作日也要等到 10 点，凌晨 00:00 那一跳不能把工资记成半夜到账。
+        if int(getattr(now, "hour", 10)) < 10:
+            return {"ok": False, "reason": "not_pay_time", "summary": None}
+        try:
+            from ..utils import facts
+        except ImportError:
+            from utils import facts
         # 全勤奖：当月没有任何迟到/早退/事假/病假，发薪日补一笔
         engine = getattr(self.plugin, "work_events", None)
         if engine is not None:
@@ -265,7 +280,7 @@ class FinanceSalary:
             except Exception as exc:
                 isolated("salary.full_attendance", exc)
         try:
-            if int(now.month) == 1 and int(now.day) == 15:
+            if int(pay_day.month) == 1 and int(pay_day.day) == 15:
                 months = 1 + stable_int("year_end:" + str(now.year), 0, 3)
                 self.add_item(period, "bonus", "年终奖", int(self.base_cents() * months))
         except Exception as exc:
@@ -273,21 +288,36 @@ class FinanceSalary:
         summary = self.summary(period)
         net = int(summary["net_cents"])
         if net <= 0:
-            text = "这个月白干了，基本工资 %s，扣完还倒欠，实发 %s，只能等下个月。" % (
-                yuan(summary["base_cents"]), yuan(net))
+            text = facts.salary_zero_fact(int(summary["base_cents"]), net)
             await self._remember(text, "salary:zero:%s" % period)
-            self.finance.long_diary(text)
+            diary = getattr(self.finance, "small_diary", None)
+            if callable(diary):
+                diary(text)
+            else:
+                self.finance.long_diary(text)
             self.repo.mark_settled(period, "salary", str({"net": net, "zero": True}))
             return {"ok": True, "paid": 0, "zero": True, "summary": summary}
-        result = await self.finance.income(net, "工资", "salary:" + period, salary=True)
+        pay_ts = _dt.datetime.combine(pay_day, _dt.time(10, 0)).timestamp()
+        try:
+            result = await self.finance.income(net, "工资", "salary:" + period,
+                                               salary=True, detail=summary, when_ts=pay_ts)
+        except TypeError:  # 老测试桩没有 when_ts / detail 参数
+            try:
+                result = await self.finance.income(net, "工资", "salary:" + period,
+                                                   salary=True, detail=summary)
+            except TypeError:
+                result = await self.finance.income(net, "工资", "salary:" + period, salary=True)
         if not result.get("ok"):
             return {"ok": False, "reason": "wallet", "summary": summary}
-        detail = self._detail_text(summary)
-        word = "狂喜、超级开心" if summary["bonus_cents"] > 0 else (
-            "委屈、难过、想哭" if summary["deduction_cents"] > 0 else "平静")
-        text = "今天发工资了！%s实发 %s。%s" % (detail, yuan(net), word)
-        await self._remember(text, "salary:paid:%s" % period)
-        self.finance.long_diary(text)
+        balance = int(self.finance.balance_cents() or 0)
+        text = facts.salary_fact(int(summary["base_cents"]), int(summary["bonus_cents"]),
+                                 int(summary["deduction_cents"]), net, balance)
+        # 只保留一条工资事实（income 已写记忆），这里只写日记，不再重复记流水。
+        diary = getattr(self.finance, "small_diary", None)
+        if callable(diary):
+            diary(text)
+        else:
+            self.finance.long_diary(text)
         if summary["deduction_cents"] > 0:
             self.finance.nudge_mood({"委屈": 10, "难过": 6}, "salary:cut:%s" % period)
             self.start_thrifty(now)

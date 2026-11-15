@@ -1,0 +1,11 @@
+{
+  "nightly_apply": [
+    "facts",
+    "ids",
+    "meta"
+  ],
+  "nightly_memory_candidates": [
+    "hours",
+    "limit"
+  ]
+}

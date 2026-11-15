@@ -87,16 +87,22 @@ class FakePlugin:
 
 
 class LateNightWatchTests(unittest.TestCase):
-    def test_snack_at_1am(self):
+    def test_snack_at_11pm(self):
         plugin = FakePlugin()
-        asyncio.run(late.tick(plugin, dt.datetime(2026, 11, 15, 1, 10)))
+        asyncio.run(late.tick(plugin, dt.datetime(2026, 11, 15, 23, 10)))
         self.assertTrue(plugin.finance.spent)
         self.assertEqual(len(plugin.amo.snacks), 1)
         self.assertTrue(any("熬夜" in d for d in plugin.finance.diaries))
 
+    def test_no_snack_after_midnight(self):
+        plugin = FakePlugin()
+        asyncio.run(late.tick(plugin, dt.datetime(2026, 11, 15, 1, 10)))
+        self.assertEqual(plugin.finance.spent, [])
+        self.assertEqual(plugin.amo.snacks, [])
+
     def test_no_snack_when_full(self):
         plugin = FakePlugin(hunger=80)
-        asyncio.run(late.tick(plugin, dt.datetime(2026, 11, 15, 1, 10)))
+        asyncio.run(late.tick(plugin, dt.datetime(2026, 11, 15, 23, 10)))
         self.assertEqual(plugin.finance.spent, [])
 
     def test_late_fine_on_workday(self):

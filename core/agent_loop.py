@@ -42,7 +42,6 @@ class FinanceDecision:
             cost = int(row.get("cost_cents") or 0)
             last = int(row.get("last_cents") or cost)
             qty = float(row.get("qty") or 0)
-            base = cost * qty
             out.append({
                 "kind": row.get("kind"), "code": row.get("code"), "name": row.get("name") or row.get("code"),
                 "qty": qty, "cost_cents": cost, "last_cents": last,
@@ -91,7 +90,7 @@ class FinanceDecision:
                     return {"action": "sell", "code": best["code"], "qty": int(best["qty"]),
                             "reason": "小赚 %.1f%% 先落袋" % best["pnl_pct"]}
                 if best["pnl_pct"] >= 5 and roll < 0.35:
-                    return {"action": "sell", "code": best["code"], "qty": int(best["qty"] // 2 * 100),
+                    return {"action": "sell", "code": best["code"], "qty": max(100, (int(best["qty"]) // 200) * 100),
                             "reason": "大赚 %.1f%%，先卖一半稳稳的" % best["pnl_pct"]}
                 return {"action": "hold", "code": best["code"],
                         "reason": "还看好，想再拿拿看（现在 %+.1f%%）" % best["pnl_pct"]}
@@ -137,6 +136,39 @@ class FinanceDecision:
 
     async def run_slot(self, slot, now=None):
         now = now or _dt.datetime.now()
+        positions, codes = self._slot_candidates(now)
+        day = now.date().isoformat()
+        quotes, failure = await self._slot_quotes(codes, now, day)
+        if failure is not None:
+            return failure
+        cash = self.finance.balance_cents() or 0
+        mood = self.finance.mood()
+        try:
+            gamble = getattr(self.plugin, "gamble", None)
+            if gamble is not None:
+                await gamble.maybe_gamble(quotes, positions, mood.get("word"), now)
+        except Exception as exc:
+            isolated("finance.gamble", exc)
+        try:
+            from .llm_decider import llm_decide
+        except ImportError:  # 直接按文件加载时
+            from core.llm_decider import llm_decide
+        news_text, failure = await self._slot_news(positions, now, day)
+        if failure is not None:
+            return failure
+        decision = await self._slot_decision(now, cash, positions, quotes, mood, news_text, llm_decide)
+        if not decision:
+            decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
+                                   random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
+        executed = await self._slot_settle(slot, decision, now)
+        if self.help is not None:
+            state = self.help.status()
+            if state["low"]:
+                await self._low_fund(state, now)
+        return {"decision": decision, "executed": executed}
+
+    def _slot_candidates(self, now):
+        """候选代码：现有持仓 + 每日锚点 + 待观察候选。"""
         positions = self._positions()
         codes = [p["code"] for p in positions]
         if self.pools is not None:
@@ -149,37 +181,31 @@ class FinanceDecision:
                     codes.append(code)
         else:
             codes += list(CANDIDATES)
-        day = now.date().isoformat()
+        return positions, codes
+
+    async def _slot_quotes(self, codes, now, day):
+        """数据兜底与行情：数据失败当天不出手，否则刷新行情并补齐候选。"""
         # 数据失败兜底：当天不再自主交易（只记日志，不写记忆/日记）
         if self.repo.meta_get("news_fail:" + day):
-            return {"skipped": "data_failed",
-                    "decision": {"action": "hold", "reason": "今天行情/新闻拉取失败，先不交易"},
-                    "executed": {"ok": False, "message": "数据失败，今天不交易"}}
+            return None, {"skipped": "data_failed",
+                          "decision": {"action": "hold", "reason": "今天行情/新闻拉取失败，先不交易"},
+                          "executed": {"ok": False, "message": "数据失败，今天不交易"}}
         quotes = await self._refresh(codes)
         if not quotes:
             self.repo.meta_set("news_fail:" + day, "quotes")
-            return {"skipped": "quotes_failed",
-                    "decision": {"action": "hold", "reason": "行情拉不到，今天先不动"},
-                    "executed": {"ok": False, "message": "行情失败，今天不交易"}}
+            return None, {"skipped": "quotes_failed",
+                          "decision": {"action": "hold", "reason": "行情拉不到，今天先不动"},
+                          "executed": {"ok": False, "message": "行情失败，今天不交易"}}
         if self.pools is not None:
             self.pools.remember_names(quotes)
             observation = self.pools.observe(quotes, now.date().isoformat())
             for code in observation:
                 if code not in codes:
                     codes.append(code)
-        cash = self.finance.balance_cents() or 0
-        mood = self.finance.mood()
-        try:
-            gamble = getattr(self.plugin, "gamble", None)
-            if gamble is not None:
-                await gamble.maybe_gamble(quotes, positions, mood.get("word"), now)
-        except Exception as exc:
-            isolated("finance.gamble", exc)
-        decision = None
-        try:
-            from .llm_decider import llm_decide
-        except ImportError:  # 直接按文件加载时
-            from core.llm_decider import llm_decide
+        return quotes, None
+
+    async def _slot_news(self, positions, now, day):
+        """新闻注入：每天最多查三次（9:30 / 11:35 / 14:50），拉市场与持仓新闻。"""
         news_text = ""
         self._news_used = False
         try:
@@ -187,9 +213,9 @@ class FinanceDecision:
         except Exception:
             fetched = 0
         if fetched >= 3:      # 每天最多查三次（9:30 / 11:35 / 14:50）
-            return {"skipped": "news_quota",
-                    "decision": {"action": "hold", "reason": "今天新闻额度用完了"},
-                    "executed": {"ok": False, "message": "不重复查新闻"}}
+            return None, {"skipped": "news_quota",
+                          "decision": {"action": "hold", "reason": "今天新闻额度用完了"},
+                          "executed": {"ok": False, "message": "不重复查新闻"}}
         try:
             from ..services.news_api import fetch_cls, fetch_eastmoney, merge_stock_news
         except ImportError:  # 直接按文件加载时
@@ -218,6 +244,11 @@ class FinanceDecision:
             self.repo.meta_set("news_fetch:" + day, fetched + 1)
         except Exception as exc:
             isolated("finance.news.inject", exc)
+        return news_text, None
+
+    async def _slot_decision(self, now, cash, positions, quotes, mood, news_text, llm_decide):
+        """决策输入：可用标的、相关记忆、银行/保险提示，交给 llm_decide。"""
+        decision = None
         if self.plugin is not None:
             allowed = {p["code"] for p in positions}
             if self.pools is not None:
@@ -226,72 +257,80 @@ class FinanceDecision:
             tm = getattr(self.plugin, "finance_memory", None)
             if tm is not None:
                 memory_text = tm.context_text([p["code"] for p in positions] + list(allowed), limit=18)
-            bank_line = ""
-            try:
-                bank = getattr(self.plugin, "bank", None)
-                if bank is None:
-                    from ..services.bank_engine import build_bank
-                    bank = build_bank(self.plugin)
-                    self.plugin.bank = bank
-                if bank is not None:
-                    bank_line = bank.prompt_line()
-                    ins = getattr(self.plugin, "insurance", None)
-                    if ins is not None:
-                        bank_line += chr(10) + ins.prompt_line()
-                        try:
-                            repo = self.repo
-                            idle = int(self.finance.balance_cents() or 0)
-                            has_car = bool(repo.assets_of('car')) if hasattr(repo, 'assets_of') else False
-                            has_house = bool(repo.assets_of('house')) if hasattr(repo, 'assets_of') else False
-                            health = 80
-                            try:
-                                med = getattr(self.plugin, "medical", None)
-                                if med is not None:
-                                    snap = med.health_snapshot()
-                                    health = (60 if snap["severity"] >= 2 else 85)
-                            except Exception as exc3:
-                                isolated("insurance.health", exc3)
-                            news = str(repo.meta_get("news_text_today") or "")
-                            asset = str(repo.meta_get("new_asset_event") or "")
-                            if asset:
-                                repo.meta_set("new_asset_event", "")
-                            hint = ins.decision_hint(health=health, news=news, idle_cents=idle, has_car=has_car, has_house=has_house)
-                            extra = []
-                            if health < 60:
-                                extra.append("当前健康值：%d（偏低）" % health)
-                            for w in ("猝死", "重疾", "流感", "交通事故", "火灾", "漏水"):
-                                if w in news:
-                                    extra.append("近期新闻包含「%s」" % w)
-                                    break
-                            if asset == "car":
-                                extra.append("你昨天刚买了新车，建议买交强险/商业车险")
-                            if asset == "house":
-                                extra.append("你昨天刚买了新房，建议买家财险")
-                            if extra:
-                                hint = "【今日风险提示】" + "；".join(extra) + ("。" + hint.replace("【保险购买建议】", "") if hint else "")
-                            if hint and str(repo.meta_get("last_insurance_check_date") or "") == now.date().isoformat():
-                                hint = ""
-                            repo.meta_set("last_insurance_check_date", now.date().isoformat())
-                            if hint:
-                                bank_line += chr(10) + hint
-                        except Exception as exc2:
-                            isolated('finance.insurance.hint', exc2)
-            except Exception as exc:
-                isolated("finance.bank.prompt", exc)
+            bank_line = self._slot_bank_line(now)
             decision = await llm_decide(self.plugin, cash, positions, quotes, mood.get("word"), allowed,
                                         news_text, (memory_text + "\n" + bank_line).strip())
-        if not decision:
-            decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
-                                   random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
+        return decision
+
+    def _slot_bank_line(self, now):
+        """决策输入：银行利率提示 + 保险建议行。"""
+        bank_line = ""
+        try:
+            bank = getattr(self.plugin, "bank", None)
+            if bank is None:
+                from ..services.bank_engine import build_bank
+                bank = build_bank(self.plugin)
+                self.plugin.bank = bank
+            if bank is not None:
+                bank_line = bank.prompt_line()
+                ins = getattr(self.plugin, "insurance", None)
+                if ins is not None:
+                    bank_line += chr(10) + ins.prompt_line()
+                    hint = ""
+                    try:
+                        hint = self._slot_insurance_hint(ins, now)
+                    except Exception as exc2:
+                        isolated('finance.insurance.hint', exc2)
+                    if hint:
+                        bank_line += chr(10) + hint
+        except Exception as exc:
+            isolated("finance.bank.prompt", exc)
+        return bank_line
+
+    def _slot_insurance_hint(self, ins, now):
+        """保险建议：结合健康值、当日新闻与近期资产事件给出风险提示。"""
+        repo = self.repo
+        idle = int(self.finance.balance_cents() or 0)
+        has_car = bool(repo.assets_of('car')) if hasattr(repo, 'assets_of') else False
+        has_house = bool(repo.assets_of('house')) if hasattr(repo, 'assets_of') else False
+        health = 80
+        try:
+            med = getattr(self.plugin, "medical", None)
+            if med is not None:
+                snap = med.health_snapshot()
+                health = (60 if snap["severity"] >= 2 else 85)
+        except Exception as exc3:
+            isolated("insurance.health", exc3)
+        news = str(repo.meta_get("news_text_today") or "")
+        asset = str(repo.meta_get("new_asset_event") or "")
+        if asset:
+            repo.meta_set("new_asset_event", "")
+        hint = ins.decision_hint(health=health, news=news, idle_cents=idle, has_car=has_car, has_house=has_house)
+        extra = []
+        if health < 60:
+            extra.append("当前健康值：%d（偏低）" % health)
+        for w in ("猝死", "重疾", "流感", "交通事故", "火灾", "漏水"):
+            if w in news:
+                extra.append("近期新闻包含「%s」" % w)
+                break
+        if asset == "car":
+            extra.append("你昨天刚买了新车，建议买交强险/商业车险")
+        if asset == "house":
+            extra.append("你昨天刚买了新房，建议买家财险")
+        if extra:
+            hint = "【今日风险提示】" + "；".join(extra) + ("。" + hint.replace("【保险购买建议】", "") if hint else "")
+        if hint and str(repo.meta_get("last_insurance_check_date") or "") == now.date().isoformat():
+            hint = ""
+        repo.meta_set("last_insurance_check_date", now.date().isoformat())
+        return hint
+
+    async def _slot_settle(self, slot, decision, now):
+        """执行记录：非午间才成交，随后写决策记录。"""
         executed = {"ok": False, "message": "只复盘，不成交"}
         if slot != "noon":
             executed = await self._execute(slot, decision, now)
         await self._record(slot, decision, executed, now)
-        if self.help is not None:
-            state = self.help.status()
-            if state["low"]:
-                await self._low_fund(state, now)
-        return {"decision": decision, "executed": executed}
+        return executed
 
     async def _execute(self, slot, decision, now):
         idem = "decision:%s:%s" % (now.date().isoformat(), slot)

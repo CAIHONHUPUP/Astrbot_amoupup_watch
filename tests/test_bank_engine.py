@@ -18,6 +18,18 @@ class Fin:
     def nudge_mood(self, d, i): self.moods.append(d)
     def small_diary(self, t): self.diaries.append(t)
     def long_diary(self, t): self.diaries.append(t)
+class FinRec(Fin):
+    """记下每次扣款用的幂等键，验证同一天两笔同样金额不被串成同一笔。"""
+
+    def __init__(self, c=1000000):
+        super().__init__(c)
+        self.idems = []
+
+    async def expense(self, n, r, i, necessary=False):
+        self.idems.append(i)
+        return await super().expense(n, r, i, necessary=necessary)
+
+
 class P: config = {}
 
 def test_deposit_withdraw_and_penalty():
@@ -28,6 +40,15 @@ def test_deposit_withdraw_and_penalty():
     out = asyncio.run(b.withdraw(500000, 0, dt.datetime(2026, 2, 1)))
     assert out["ok"] and out["penalty"] is True
     assert fin.c > 500000  # 本金 + 活期微息
+
+def test_two_same_amount_deposits_same_day_use_distinct_idem():
+    repo, fin = Repo(), FinRec()
+    b = BankEngine(P(), repo, fin)
+    assert asyncio.run(b.deposit(500000, 0, dt.datetime(2026, 1, 1, 10, 5)))["ok"]
+    assert asyncio.run(b.deposit(500000, 0, dt.datetime(2026, 1, 1, 15, 40)))["ok"]
+    # 同一天、同金额、同期限：以前幂等键完全一样，第二笔会被当重复扣款
+    assert len(set(fin.idems)) == 2, fin.idems
+
 
 def test_matured_fixed_pays_principal_and_interest_once():
     repo, fin = Repo(), Fin()
@@ -104,3 +125,27 @@ def test_emergency_uses_current_first():
     asyncio.run(b.deposit(200000, 0))
     out = asyncio.run(b.emergency_liquidate(150000))
     assert out["ok"] and out["from"] == "current"
+
+def test_withdraw_rejects_nonpositive_amount():
+    """负数取款会让活期余额不减反增，等于凭空造钱。"""
+    repo, fin = Repo(), Fin()
+    b = BankEngine(P(), repo, fin)
+    asyncio.run(b.deposit(500000, 0, dt.datetime(2026, 1, 1)))
+    before = b.current_cents()
+    out = asyncio.run(b.withdraw(-10000, None, dt.datetime(2026, 1, 2)))
+    assert out["ok"] is False and out["reason"] == "bad_amount"
+    assert b.current_cents() == before and fin.c == 500000
+
+def test_withdraw_keeps_bank_balance_when_credit_fails():
+    """入账失败（幂等冲突/钱包拒绝）时不能先把银行的钱扣掉。"""
+    class FailFin(Fin):
+        async def income(self, n, r, i, **k):
+            return {"ok": False}
+
+    repo, fin = Repo(), FailFin()
+    b = BankEngine(P(), repo, fin)
+    asyncio.run(b.deposit(500000, 0, dt.datetime(2026, 1, 1)))
+    before = b.current_cents()
+    out = asyncio.run(b.withdraw(100000, None, dt.datetime(2026, 1, 2)))
+    assert out["ok"] is False and out["reason"] == "credit_failed"
+    assert b.current_cents() == before and fin.c == 500000

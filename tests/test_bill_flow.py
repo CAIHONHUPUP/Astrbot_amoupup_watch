@@ -41,6 +41,16 @@ class BillFlowTests(unittest.TestCase):
         self.assertEqual(bf.due_day(dt.datetime(2026, 10, 1, 9), {"10-01", "10-02"}),
                          dt.date(2026, 10, 5))
 
+    def test_national_day_moves_to_oct_8(self):
+        # 2026-10-01 ~ 10-07 国庆，周末夹在中间，顺延到 10-08 周四
+        self.assertEqual(bf.due_day(dt.datetime(2026, 10, 1, 9)), dt.date(2026, 10, 8))
+
+    def test_deferral_note_on_month_end(self):
+        plugin = FakePlugin()
+        note = bf.deferral_note(plugin, dt.datetime(2026, 10, 31, 20))
+        self.assertIn("账单顺延", note)
+        self.assertIn("11 月 2 日", note)
+
     def test_create_due_idempotent(self):
         plugin = FakePlugin(); now = dt.datetime(2026, 11, 2, 9)
         first = bf.create_due(plugin, now)

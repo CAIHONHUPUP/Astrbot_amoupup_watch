@@ -32,6 +32,7 @@ class FakeWallet:
         self.credit_ok = credit_ok
         self.debit_ok = debit_ok
         self.calls = []
+        self.reasons = []
 
     def balance(self):
         return self.balance_cents
@@ -42,7 +43,8 @@ class FakeWallet:
             self.balance_cents += cents
         return self.credit_ok
 
-    def debit(self, cents, reason, idem, ref=""):
+    def debit(self, cents, reason, idem, ref="", **kwargs):
+        self.reasons.append(reason)
         self.calls.append(("debit", cents, idem))
         if self.debit_ok:
             self.balance_cents -= cents
@@ -123,11 +125,29 @@ def test_income_writes_wallet_mood_schedule_diary_memory():
     assert amo.wallet.calls[0][0] == "credit"
     assert amo.state.nudges and amo.state.nudges[0][0].startswith("salary:2026-11")
     item = amo.state.schedule[0]
-    assert "情绪由" in item["event"] and not any(ch.isdigit() for ch in item["event"])
-    assert amo.db.diaries and "到账" in amo.db.diaries[0][2]
-    assert amo.memories and "发工资" in amo.memories[0]["content"]
+    # 账本/日程只留客观事实：没有“情绪由…变为…”，也没有心情词
+    assert "event" not in item
+    assert item["start"] == "10:00" and item["end"] == "10:10"
+    assert "工资" in item["detail"] and "元" in item["detail"]
+    assert amo.db.diaries and "收入" in amo.db.diaries[0][2]
+    assert amo.memories and "收入" in amo.memories[0]["content"]
+    assert "很开心" not in amo.memories[0]["content"]
     assert amo.memories[0]["idem"] == "salary:2026-11:mem"
-    assert amo.long_diaries
+
+
+def test_finance_schedule_end_does_not_wrap_at_midnight():
+    """23:5x 的财务条目 end 不能回绕成 00:0x（比 start 还早）。"""
+    import datetime as _dt
+    import time as _time
+
+    amo, link = make()
+    stamp = _dt.datetime(2026, 11, 15, 23, 55).timestamp()
+    ok = link._schedule(amo, "支出", 2000, "", when_ts=stamp)
+    assert ok is True
+    item = amo.state.schedule[0]
+    assert item["start"] == "23:55", item
+    assert item["end"] == "23:59", item
+    assert _time.strptime(item["end"], "%H:%M") > _time.strptime(item["start"], "%H:%M")
 
 
 def test_expense_insufficient_does_not_break():
@@ -142,8 +162,19 @@ def test_trade_loss_writes_long_diary_and_memory():
     res = run(link.trade_pnl(-200000, -0.12, "600519", "trade:1"))
     assert res["ok"] is True
     assert amo.state.nudges[0][1].get("郁闷", 0) > 0
-    assert amo.long_diaries and "亏了" in amo.long_diaries[0][1]
-    assert amo.memories and "实现亏损" in amo.memories[0]["content"]
+    assert amo.db.diaries and "交易亏损" in amo.db.diaries[0][2]
+    assert amo.memories and "交易亏损" in amo.memories[0]["content"]
+
+
+def test_expense_reason_has_no_category_prefix():
+    """写库的 reason 只留纯物品/原因，严禁再拼「餐饮：/日常：」。"""
+    amo, link = make()
+    res = run(link.expense(1500, "面条 × 1", "meal:2026-11-15:lunch:2"))
+    assert res["ok"] is True
+    assert amo.wallet.reasons, "应该有一笔扣款"
+    reason = amo.wallet.reasons[-1]
+    assert reason == "面条 × 1", reason
+    assert "：" not in reason and ":" not in reason
 
 
 def test_mood_failure_does_not_block_wallet():

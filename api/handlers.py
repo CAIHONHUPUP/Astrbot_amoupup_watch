@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
-import json
 import os
 import time
 
@@ -32,11 +31,16 @@ class ApiMixin:
             finance = getattr(self, "finance", None)
             amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
             if amo is None:
-                return {"ok": False, "message": "钱包未就绪"}
-            return {"ok": True, "items": amo.wallet.ledger(80)}
+                return {"ok": False, "message": "钱暂时还没接上，稍后再看"}
+            try:
+                from ..utils.ui_sanitize import sanitize_ledger_item
+            except ImportError:
+                from utils.ui_sanitize import sanitize_ledger_item
+            rows = [sanitize_ledger_item(item) for item in (amo.wallet.ledger(80) or [])]
+            return {"ok": True, "items": rows}
         except Exception as exc:
             isolated("web.ledger", exc)
-            return {"ok": False, "message": "流水读取失败"}
+            return {"ok": False, "message": "流水暂时读不到，稍后再看"}
 
     async def _api_finance(self, request=None):
         try:
@@ -123,8 +127,30 @@ class ApiMixin:
                     pass
                 recv = social.repo.receivables()
                 return {"ok": True, "npcs": rows, "receivables": recv,
-                        "line": social.relation_line()}
+                        "line": social.relation_line(),
+                        "events": social.events(10),
+                        "pending": social.pending_invite()}
             body = await self._read_json()
+            if str(body.get("action") or "").lower() == "invite":
+                try:
+                    amount_cents = int(round(float(body.get("amount") or 0) * 100))
+                except (TypeError, ValueError):
+                    amount_cents = 0
+                made = await social.create_invite(kind=str(body.get("kind") or ""),
+                                                   npc=str(body.get("npc") or ""),
+                                                   amount_cents=amount_cents)
+                return {"ok": bool(made.get("ok")), "result": made}
+            if str(body.get("action") or "").lower() == "cancel":
+                social.clear_invite()
+                return {"ok": True, "result": {"pending": social.pending_invite()}}
+            if str(body.get("action") or "").lower() == "decide":
+                # 手动推一次「抛事实 -> 她自己决定 -> 结算」，方便在面板上验收
+                out = await social.scheduled()
+                return {"ok": True,
+                        "result": {"decision": (out or {}).get("decision"),
+                                   "invite": (out or {}).get("invite"),
+                                   "pending": social.pending_invite(),
+                                   "events": social.events(5)}}
             name = str(body.get("name") or "随礼")
             table = {"随礼": social.gift_money, "红包": social.red_packet,
                      "聚餐": social.dinner, "借钱": social.borrow_request, "批评": social.criticism}

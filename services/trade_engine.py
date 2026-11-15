@@ -11,9 +11,9 @@ from __future__ import annotations
 import datetime as _dt
 
 try:
-    from ..utils.helpers import fund_cutoff, in_session, is_trading_day, next_trading_day
+    from ..utils.helpers import fund_cutoff, in_session, next_trading_day
 except ImportError:  # 按文件/顶层包加载时
-    from utils.helpers import fund_cutoff, in_session, is_trading_day, next_trading_day
+    from utils.helpers import fund_cutoff, in_session, next_trading_day
 from .market_api import fetch_quotes
 
 COMMISSION_RATE = 0.00025
@@ -100,7 +100,7 @@ class Trading:
         total = 0
         try:
             for row in self.repo.positions():
-                total += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)
+                total += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)  # type: ignore[assignment]
         except Exception:
             return 0
         return int(round(total))

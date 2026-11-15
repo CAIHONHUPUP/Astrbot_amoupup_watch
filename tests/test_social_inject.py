@@ -27,6 +27,21 @@ class InjectTests(unittest.TestCase):
             social_cmd.inject_request(object(), request)
         self.assertEqual(request.system_prompt, "base")
 
+    def test_invite_block_is_injected(self):
+        request = SimpleNamespace(system_prompt="base")
+        block = "【社交邀约·真实发生】柳如烟（闺蜜）发微信问你：\n「下午去逛街吗？」"
+        with mock.patch.object(social_cmd, "prompt_line", return_value="【关系】测试关系"), \
+                mock.patch.object(social_cmd, "invite_block", return_value=block):
+            social_cmd.inject_request(object(), request)
+        self.assertIn("【社交邀约", request.system_prompt)
+
+    def test_no_invite_means_no_block(self):
+        request = SimpleNamespace(system_prompt="base")
+        with mock.patch.object(social_cmd, "prompt_line", return_value=""), \
+                mock.patch.object(social_cmd, "invite_block", return_value=""):
+            social_cmd.inject_request(object(), request)
+        self.assertEqual(request.system_prompt, "base")
+
 
 if __name__ == "__main__":
     unittest.main()

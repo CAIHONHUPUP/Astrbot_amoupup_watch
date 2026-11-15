@@ -12,12 +12,6 @@ from __future__ import annotations
 import datetime as _dt
 import time
 
-try:
-    from ..guard import isolated
-    from ..utils.helpers import stable_int, yuan
-except ImportError:  # 按顶层包/单文件加载时
-    from guard import isolated
-    from utils.helpers import stable_int, yuan
 
 LOW_RATIO = 0.05
 LOAN_RATE_RANGE = (0.03, 0.18)
@@ -53,7 +47,7 @@ def amortization(principal_cents, periods, annual_rate):
             "seq": seq, "principal": principal_part, "interest": interest,
             "payment": payment_last, "due_day": "%04d-%02d-%02d" % (year, month, day),
         })
-    total_interest = sum(r["interest"] for r in rows)
+    total_interest = sum(r["interest"] for r in rows)  # type: ignore[misc]
     return (rows[0]["payment"] if rows else payment), total_interest, rows
 
 
@@ -69,7 +63,7 @@ class FinanceHelp:
         market_value = 0
         try:
             for row in self.repo.positions():
-                market_value += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)
+                market_value += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)  # type: ignore[assignment]
         except Exception:
             market_value = 0
         debt = 0

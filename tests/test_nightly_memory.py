@@ -140,5 +140,70 @@ class NightlyTests(unittest.TestCase):
         self.assertEqual(nm._parse_facts("- 喜欢猫\n- 喜欢猫\n无"), ["喜欢猫"])
 
 
+class AsyncFakeData(FakeData):
+    """新版记忆插件是 async 门面：同步/async 两种写法都要跑得通。"""
+
+    async def nightly_memory_candidates(self, hours=24, limit=300):
+        return list(self.rows)
+
+    async def nightly_apply(self, meta, facts, ids):
+        self.applied.append((meta, facts, ids))
+        return {"written": len(facts), "archived": len(ids)}
+
+
+class OldFakeData:
+    """老版记忆插件没有夜间方法。"""
+
+
+class NightlyCompatTests(unittest.TestCase):
+    def run_with(self, data, when=None):
+        plugin = FakePlugin(data, FakeProvider("喜欢吃螺蛳粉"))
+        self.calls = 0
+
+        async def fake_provider(_plugin):
+            self.calls += 1
+            return plugin._provider_impl
+
+        old = nm._provider
+        nm._provider = fake_provider
+        try:
+            return asyncio.run(nm.nightly_tick(plugin, now=when or dt.datetime(2026, 11, 15, 3, 0)))
+        finally:
+            nm._provider = old
+
+    def test_async_memory_plugin_supported(self):
+        data = AsyncFakeData(rows())
+        out = self.run_with(data)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["written"], 1)
+        self.assertTrue(data.applied)
+
+    def test_parse_facts_keeps_leading_numbers(self):
+        """lstrip 会把「3 点才睡」啃成「点才睡」，这里钉住只剥列表符号。"""
+        self.assertEqual(nm._parse_facts("3 点才睡\n11 点了还在加班\n- 12 点吃午饭"),
+                         ["3 点才睡", "11 点了还在加班", "12 点吃午饭"])
+
+    def test_disabled_data_plugin_is_treated_as_missing(self):
+        class DisabledMeta(FakeMeta):
+            activated = False
+
+        class DisabledContext(FakeContext):
+            def get_registered_star(self, name):
+                return DisabledMeta(self.data)
+
+        class DisabledPlugin(FakePlugin):
+            def __init__(self, data, provider):
+                self.context = DisabledContext(data)
+                self.finance_repo = FakeRepo()
+                self._provider_impl = provider
+
+        self.assertIsNone(nm._data_plugin(DisabledPlugin(FakeData(rows()), FakeProvider())))
+
+    def test_old_memory_plugin_reports_too_old(self):
+        out = self.run_with(OldFakeData())
+        self.assertEqual(out["reason"], "memory_plugin_too_old")
+        self.assertEqual(self.calls, 0, "插件不支持就不该去调模型")
+
+
 if __name__ == "__main__":
     unittest.main()

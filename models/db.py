@@ -212,11 +212,21 @@ class Store:
         for ddl in (
             "ALTER TABLE loans ADD COLUMN status TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE positions ADD COLUMN ready_day TEXT NOT NULL DEFAULT ''",
+            # 2026-11-15：NPC 自己的生活轨迹（一句话状态）+ 上次换状态的时间
+            "ALTER TABLE npc_relations ADD COLUMN status TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE npc_relations ADD COLUMN status_at REAL NOT NULL DEFAULT 0",
+            # 2026-11-15：事件幂等键（同一条事件只能落库一次，防刷屏）
+            "ALTER TABLE events ADD COLUMN idem TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idem "
+                         "ON events(idem) WHERE idem != ''")
+        except sqlite3.OperationalError:
+            pass
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
             conn.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)

@@ -32,7 +32,7 @@ def _get(url, timeout=8):
             last_exc = exc
             if attempt == 0:
                 time.sleep(0.2)
-    raise last_exc
+    raise last_exc or RuntimeError("fetch failed without exception")
 
 
 def strip_jsonp(text):

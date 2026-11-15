@@ -139,7 +139,8 @@ class ArrivalTests(unittest.TestCase):
         p = FakePlugin()
         seed_pending(p)
         out = asyncio.run(de.handle_date_text(p, "好", now=NOW))
-        self.assertTrue(out["handled"])
+        # 不拦截消息、不回固定台词：开场白交给大模型
+        self.assertFalse(out["handled"])
         self.assertEqual(out["action"], "attend")
         self.assertEqual(de.active_date(p)["status"], "dating")
         self.assertEqual(p.amo.current_action, "正在和老公约会")
@@ -150,8 +151,8 @@ class ArrivalTests(unittest.TestCase):
         p = FakePlugin()
         seed_pending(p)
         out = asyncio.run(de.handle_date_text(p, "到了", now=NOW))
-        self.assertTrue(out["handled"])
-        self.assertIn("终于来啦", out["message"])
+        self.assertFalse(out["handled"])
+        self.assertEqual(out["action"], "attend")
         self.assertFalse(de.find_pending(p, ""))
 
     def test_interrupt_after_arrival(self):
@@ -171,8 +172,9 @@ class ArrivalTests(unittest.TestCase):
         p = FakePlugin()
         seed_pending(p)
         asyncio.run(de.handle_date_text(p, "到了", now=NOW))
-        out = asyncio.run(de.handle_date_text(p, "我回家了", now=NOW + dt.timedelta(hours=1)))
-        self.assertTrue(out["handled"])
+        out = asyncio.run(de.handle_date_text(p, "吃好了，我们回家吧", now=NOW + dt.timedelta(hours=1)))
+        # 收尾只解锁状态 + 写事实，道别话交给大模型：所以这里不拦截消息（handled=False）
+        self.assertFalse(out["handled"])
         self.assertEqual(out["action"], "finish")
         self.assertIsNone(de.active_date(p))
         self.assertEqual(p.amo.last_event, "逛街")
@@ -191,7 +193,7 @@ class ArrivalTests(unittest.TestCase):
         p = FakePlugin()
         seed_pending(p)
         msg = asyncio.run(confirm_arrival_tool(p, "逛街"))
-        self.assertIn("终于来啦", msg)
+        self.assertIn("约会开场", msg)
         self.assertEqual(de.active_date(p)["status"], "dating")
 
 

@@ -10,6 +10,11 @@ try:
 except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
 
+try:
+    from ..utils.helpers import HOLIDAYS_2026
+except ImportError:  # 离线测试 / 顶层加载
+    from utils.helpers import HOLIDAYS_2026
+
 PENALTY_RATE = 0.05
 STAGE_HOURS = (24, 72, 168)
 
@@ -23,28 +28,65 @@ def _finance(plugin):
 
 
 def holidays(plugin):
+    """法定节假日 = 内置国家节假日库 + 配置里的额外日期。"""
     raw = ""
     try:
         raw = str(getattr(plugin, "cfg_str", lambda *a, **k: "" )("bill_holidays", "") or "")
     except Exception:
         raw = ""
-    return {item.strip() for item in raw.replace("，", ",").split(",") if item.strip()}
+    configured = {item.strip() for item in raw.replace("，", ",").split(",") if item.strip()}
+    return set(HOLIDAYS_2026) | configured
 
 
 def is_workday(day, holiday_set=None):
     if day.weekday() >= 5:
         return False
-    holiday_set = holiday_set or set()
+    if holiday_set is None:
+        holiday_set = HOLIDAYS_2026
     return day.isoformat() not in holiday_set and day.strftime("%m-%d") not in holiday_set
 
 
 def due_day(now, holiday_set=None):
-    day = now.replace(day=1).date()
-    for _ in range(14):
+    """账单日：1 号遇周末/节假日顺延到下一个工作日。"""
+    base = now.date() if hasattr(now, "date") else now
+    day = base.replace(day=1)
+    for _ in range(30):
         if is_workday(day, holiday_set):
             return day
         day += _dt.timedelta(days=1)
     return day
+
+
+def salary_pay_day(now, holiday_set=None):
+    """发薪日：15 号遇周末/节假日顺延到下一个工作日（周一）。"""
+    base = now.date() if hasattr(now, "date") else now
+    day = base.replace(day=15)
+    for _ in range(30):
+        if is_workday(day, holiday_set):
+            return day
+        day += _dt.timedelta(days=1)
+    return day
+
+
+def deferral_note(plugin, now=None):
+    """月底最后一天，如果下月 1 号不是工作日，给聊天注入一句“还能多捂两天钱”。"""
+    now = now or _dt.datetime.now()
+    base = now.date() if hasattr(now, "date") else now
+    if (base + _dt.timedelta(days=1)).month == base.month:
+        return ""
+    next_first = (base.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+    due = due_day(next_first, holidays(plugin))
+    if due.day <= 1:
+        return ""
+    name = "账单"
+    try:
+        rows = bill_plan(plugin, next_first.strftime("%Y-%m"))
+        if rows:
+            name = str(rows[0].get("name") or "账单")
+    except Exception as exc:
+        isolated("bill_flow.deferral_note", exc)
+    return ("【账单顺延】明天一号，但刚好是周末/放假，%s要等到 %d 月 %d 日才扣，我还能多捂两天钱。"
+            % (name, due.month, due.day))
 
 
 def _amo_owns_home(plugin):
@@ -74,19 +116,19 @@ def bill_plan(plugin, period):
                 rows.append({"kind": "mortgage", "name": "房贷",
                              "amount_cents": min(int(loan.get("monthly_cents") or 0),
                                                  int(loan.get("balance_cents") or 0))})
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("bill_flow.bill_plan", exc)
     if life is not None:
         try:
             if not life._has("house") and not _amo_owns_home(plugin):
                 rows.append({"kind": "rent", "name": "房租", "amount_cents": int(life.rent_cents(period))})
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("bill_flow.bill_plan.2", exc)
         try:
             rows.append({"kind": "utilities", "name": "水电燃气宽带", "amount_cents": int(life.utility_cents(period))})
-        except Exception:
-            pass
-    return [row for row in rows if row["amount_cents"] > 0]
+        except Exception as exc:
+            isolated("bill_flow.bill_plan.3", exc)
+    return [row for row in rows if row["amount_cents"] > 0]  # type: ignore[operator]
 
 
 def _key(period):
@@ -107,8 +149,8 @@ def load_due(plugin, period):
 def save_due(plugin, period, rows):
     try:
         _repo(plugin).meta_set(_key(period), json.dumps(rows, ensure_ascii=False))
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("bill_flow.save_due", exc)
 
 
 FROZEN_KEY = "bill:assets_frozen"
@@ -138,16 +180,16 @@ def freeze_assets(plugin, period, rows, now):
     state = {"period": str(period), "debt_cents": total, "since": float(now.timestamp())}
     try:
         _repo(plugin).meta_set(FROZEN_KEY, json.dumps(state, ensure_ascii=False))
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("bill_flow.freeze_assets", exc)
     return state
 
 
 def clear_freeze(plugin):
     try:
         _repo(plugin).meta_set(FROZEN_KEY, "")
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("bill_flow.clear_freeze", exc)
 
 
 async def _bank_of(plugin):
@@ -258,14 +300,18 @@ async def force_settle(plugin, rows, period, now):
             await finance.permanent_memory(
                 "逾期 3 天，银行自动处置资产交了 %d 笔账单。" % paid,
                 "bill:auto:%s:mem" % period)
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("bill_flow.force_settle", exc)
     return {"paid": paid, "raised": raised}
 
 
 def create_due(plugin, now=None):
     now = now or _dt.datetime.now()
     period = now.strftime("%Y-%m")
+    holiday_set = holidays(plugin)
+    due = due_day(now, holiday_set)
+    if now.date() < due or (now.date() == due and int(now.hour) < 9):
+        return []
     rows = load_due(plugin, period)
     if rows:
         return rows
@@ -312,6 +358,12 @@ def stage_of(rows, now_ts_value):
 async def pay(plugin, kind="", now=None, payer="her"):
     now = now or _dt.datetime.now()
     period = now.strftime("%Y-%m")
+    holiday_set = holidays(plugin)
+    due = due_day(now, holiday_set)
+    if now.date() < due:
+        return {"ok": False, "message": "还没到扣款日，等 %d 月 %d 日再交吧。" % (due.month, due.day)}
+    if not is_workday(now.date(), holiday_set) or int(now.hour) < 9:
+        return {"ok": False, "message": "今天休息，银行不办理，等下一个工作日再交吧。"}
     rows = load_due(plugin, period)
     target = None
     for row in rows:
@@ -340,12 +392,12 @@ async def pay(plugin, kind="", now=None, payer="her"):
         await finance.permanent_memory("%s 交了 %s 元%s，%s。" % (
             now.strftime("%Y-%m-%d"), amount / 100.0, target.get("name"), thanks),
             "bill:paid:%s:%s:mem" % (period, target.get("kind")))
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("bill_flow.pay", exc)
     try:
         finance.small_diary("今天交了%s，钱包又空了，%s。" % (target.get("name"), "谢谢老公救急" if payer == "husband" else "心疼"))
-    except Exception:
-        pass
+    except Exception as exc:
+        isolated("bill_flow.pay.2", exc)
     return {"ok": True, "message": "交上了：%s %s 元" % (target.get("name"), amount / 100.0)}
 
 
@@ -357,6 +409,10 @@ async def overdue_tick(plugin, now=None):
     if not pending:
         return {"ok": True, "stage": 0}
     stage = stage_of(rows, now.timestamp())
+    holiday_set = holidays(plugin)
+    if not is_workday(now.date(), holiday_set) or int(now.hour) < 9:
+        # 周末/节假日/凌晨不扣滞纳金，等工作日 9 点后再说
+        return {"ok": True, "stage": stage, "deferred": True}
     finance = _finance(plugin)
     if stage >= 1:
         for row in pending:
@@ -395,8 +451,8 @@ async def overdue_tick(plugin, now=None):
                 finance.nudge_mood({"焦虑": 20, "郁闷": 15}, "bill:forced:%s" % period)
                 if not settled.get("paid"):
                     finance.small_diary("银行催我处置资产补账单，我不敢看账户了。")
-            except Exception:
-                pass
+            except Exception as exc:
+                isolated("bill_flow.overdue_tick", exc)
     if stage >= 3 and finance is not None:
         pending = unpaid(rows)
         for row in pending:
@@ -416,8 +472,8 @@ async def overdue_tick(plugin, now=None):
         try:
             finance.nudge_mood({"委屈": 50, "郁闷": 40, "开心": -40, "焦虑": 30}, "bill:final:%s" % period)
             finance.small_diary("银行把我的账户冻结了，定期和股票都动不了……")
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("bill_flow.overdue_tick.2", exc)
     save_due(plugin, period, rows)
     return {"ok": True, "stage": stage}
 
@@ -425,10 +481,11 @@ async def overdue_tick(plugin, now=None):
 def prompt_line(plugin, now=None):
     now = now or _dt.datetime.now()
     period = now.strftime("%Y-%m")
+    note = deferral_note(plugin, now)
     rows = load_due(plugin, period)
     pending = unpaid(rows)
     if not pending:
-        return ""
+        return note
     names = "、".join(str(row.get("name")) for row in pending)
     total = sum(int(row.get("amount_cents") or 0) for row in pending) / 100.0
     line = ("【银行提醒】%s 到期，共 %.2f 元，请及时还款。"
@@ -439,7 +496,7 @@ def prompt_line(plugin, now=None):
     elif any(row.get("forced") for row in pending):
         line += ("【强制执行】银行要求你变卖资产补上欠款，请调用 sell_fund / sell_stock / withdraw_fixed "
                  "把钱转到可用余额，再调用 pay_bill；不处理会继续滞纳金，直到资产被冻结。")
-    return line
+    return line + note
 
 
 def survival_line(plugin):

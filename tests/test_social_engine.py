@@ -1,60 +1,51 @@
 # -*- coding: utf-8 -*-
-import asyncio, datetime as dt
-from services.social_engine import SocialEngine
+"""社交引擎基础：种子 / 手动邀约不扣钱 / 未知 NPC / 借款应还幂等。"""
+import asyncio, datetime as dt, os, sys
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+from services.social_engine import SocialEngine  # noqa: E402
+from tests.social_fakes import FakeFinance, FakePlugin, FakeRepo  # noqa: E402
 
-class Repo:
-    def __init__(self): self.npc, self.recv, self.tasks = {}, [], {}
-    def npc_get(self, n): return self.npc.get(n)
-    def npcs(self): return list(self.npc.values())
-    def upsert_npc(self, name, circle, relation, affinity=50, tags=""):
-        self.npc[name] = {"name": name, "circle": circle, "relation": relation, "affinity": affinity, "tags": tags,
-                          "borrowed_from_her": 0, "money_owed": 0, "last_event": ""}
-    def set_affinity(self, n, v): self.npc[n]["affinity"] = v
-    def set_npc_event(self, n, t): self.npc[n]["last_event"] = t
-    def add_receivable(self, n, a, due=""): self.recv.append({"id": len(self.recv)+1, "npc": n, "amount_cents": a, "due_day": due, "status": "open"})
-    def receivables(self, status="open"): return [r for r in self.recv if r["status"] == status]
-    def settle_receivable(self, rid, s):
-        for r in self.recv:
-            if r["id"] == rid: r["status"] = s
-    def task_done(self, k): return k in self.tasks
-    def mark_task(self, k, note=""): self.tasks[k] = 1
+NOW = dt.datetime(2026, 11, 21, 10, 0, 0)
 
-class Fin:
-    def __init__(self, cash=500000): self.cash, self.diaries, self.moods, self.mems = cash, [], [], []
-    def balance_cents(self): return self.cash
-    async def expense(self, c, r, i, **k):
-        if c > self.cash: return {"ok": False}
-        self.cash -= c; return {"ok": True}
-    async def income(self, c, r, i, **k): self.cash += c; return {"ok": True}
-    def nudge_mood(self, d, i): self.moods.append(d)
-    def small_diary(self, t): self.diaries.append(t)
-    async def permanent_memory(self, t, i): self.mems.append(t)
-    def add_schedule(self, *a, **k): return True
 
-class P: config = {}
+def _engine(cash=500000):
+    repo, fin = FakeRepo(), FakeFinance(cash=cash)
+    return SocialEngine(FakePlugin(), repo, fin), repo, fin
 
-def test_seed_and_gift():
-    repo, fin = Repo(), Fin()
-    eng = SocialEngine(P(), repo, fin)
+
+def test_seed_has_seven_npcs_across_circles():
+    eng, repo, _ = _engine()
     eng.ensure_seed()
-    assert len(repo.npcs()) >= 6
-    out = asyncio.run(eng.gift_money("方圆"))
-    assert out["ok"] and fin.cash < 500000
-    assert repo.npc_get("方圆")["affinity"] > 55
+    assert len(repo.npcs()) == 7
+    assert {row["circle"] for row in repo.npcs()} >= {"friend", "work", "family"}
 
-def test_poor_escape_dinner():
-    repo, fin = Repo(), Fin(10000)
-    eng = SocialEngine(P(), repo, fin)
-    eng.ensure_seed()
-    out = asyncio.run(eng.dinner("柳如烟"))
-    assert out["ok"] is False and out["reason"] in ("escape", "insufficient")
 
-def test_borrow_creates_receivable_and_repay_is_idempotent():
-    repo, fin = Repo(), Fin()
-    eng = SocialEngine(P(), repo, fin)
-    eng.ensure_seed()
-    out = asyncio.run(eng.borrow_request("柳如烟", 50000, days=0))
-    assert out["ok"] and repo.receivables()
+def test_manual_invite_never_charges_but_marks_cooldown():
+    eng, repo, fin = _engine()
+    out = asyncio.run(eng.create_invite(now=NOW, kind="meal", npc="季博达"))
+    assert out["ok"]
+    assert fin.cash == 500000 and fin.expenses == [] and fin.schedules == []
+    assert repo.meta_get("social:last_ts")
+    assert repo.task_done("social:npc:2026-11-21:季博达")
+    assert repo.meta_get("social:count:2026-11-21") == "1"
+
+
+def test_unknown_npc_is_rejected():
+    eng, repo, fin = _engine()
+    out = asyncio.run(eng.create_invite(now=NOW, kind="meal", npc="李" + "婷"))
+    assert out["ok"] is False and out["reason"] == "unknown_npc"
+    assert eng.pending_invite() is None and fin.cash == 500000
+
+
+def test_borrow_accept_creates_receivable_and_repay_is_idempotent():
+    eng, repo, fin = _engine()
+    made = asyncio.run(eng.create_invite(now=NOW, kind="borrow", npc="柳如烟", amount_cents=50000))
+    assert made["ok"]
+    res = asyncio.run(eng.accept_invite(note="借给柳如烟周转一下"))
+    assert res["ok"] and repo.receivables()
+    assert fin.cash == 450000
     asyncio.run(eng.repay_tick(dt.date(2026, 12, 1)))
     before = len(repo.receivables())
     asyncio.run(eng.repay_tick(dt.date(2026, 12, 1)))

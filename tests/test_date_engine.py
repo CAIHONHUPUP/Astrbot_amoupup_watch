@@ -190,7 +190,7 @@ class DateEngineTests(unittest.TestCase):
         out = asyncio.run(date_engine.finish_date(plugin, NOW + dt.timedelta(hours=3)))
         self.assertTrue(out["ok"])
         self.assertFalse(date_engine._active(plugin))
-        self.assertTrue(any("最开心" in m for m in plugin.finance.memories))
+        self.assertTrue(any("约会" in m for m in plugin.finance.memories))
 
     def test_missed_date_triggers_sadness(self):
         plugin = FakePlugin(cash=50000)
@@ -208,6 +208,16 @@ class DateEngineTests(unittest.TestCase):
         afternoon = dt.datetime(2026, 11, 14, 13, 0)
         self.assertEqual(date_engine._parse_when("中午吃火锅", afternoon), dt.datetime(2026, 11, 15, 12, 0))
         self.assertEqual(date_engine._parse_when("18:30 吃火锅", dt.datetime(2026, 11, 14, 20, 0)), dt.datetime(2026, 11, 15, 18, 30))
+
+    def test_date_message_is_human(self):
+        plugin = FakePlugin()
+        out = asyncio.run(date_engine.make_date(
+            plugin, "吃火锅", "18:30", now=dt.datetime(2026, 11, 15, 18, 10)))
+        msg = out["message"]
+        self.assertIn("说定啦", msg)
+        self.assertNotRegex(msg, r"\d{2}-\d{2}")
+        self.assertNotRegex(msg, r"\d{1,2}:\d{2}")
+        self.assertTrue(out["when_text"].startswith("今晚"))
 
     def test_duplicate_same_activity_within_4h_ignored(self):
         plugin = FakePlugin()
@@ -237,3 +247,48 @@ class DateEngineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_parse_when_prefers_today_when_vague():
+    now = dt.datetime(2026, 11, 15, 18, 29)
+    when = date_engine._parse_when("搞完就出发，和你约会", now)
+    assert when.date() == now.date()
+    assert when >= now
+
+
+def test_parse_when_just_past_clock_stays_today():
+    now = dt.datetime(2026, 11, 15, 18, 29)
+    when = date_engine._parse_when("18:27", now)
+    assert when.date() == now.date(), when
+
+
+def test_human_when_has_no_numbers():
+    now = dt.datetime(2026, 11, 15, 18, 0)
+    text = date_engine._human_when(dt.datetime(2026, 11, 15, 18, 30), now)
+    assert text.startswith("今晚")
+    assert not any(ch.isdigit() for ch in text)
+    tomorrow = date_engine._human_when(dt.datetime(2026, 11, 16, 18, 30), now)
+    assert tomorrow.startswith("明天晚上")
+    assert not any(ch.isdigit() for ch in tomorrow)
+
+
+def test_date_conflict_with_work_is_refused():
+    plugin = FakePlugin()
+    plugin.finance._amo().state.schedule = {"2026-11-16": [
+        {"start": "09:00", "end": "18:00", "activity": "在公司上班", "category": "work"},
+    ]}
+    out = asyncio.run(date_engine.make_date(
+        plugin, "吃火锅", "明天 12:00", now=dt.datetime(2026, 11, 15, 18, 0)))
+    assert out["ok"] is False and out.get("conflict") is True
+    assert "上班" in out["message"] and "换个时间" in out["message"]
+
+
+def test_new_date_replaces_old_pending():
+    plugin = FakePlugin()
+    now = dt.datetime(2026, 11, 15, 18, 0)
+    asyncio.run(date_engine.make_date(plugin, "吃火锅", "明天 18:30", now=now))
+    out = asyncio.run(date_engine.make_date(plugin, "吃火锅", "今晚 20:00", now=now))
+    assert out["ok"] is True, out
+    pending = [r for r in date_engine._load(plugin) if r.get("status") == "pending"]
+    assert len(pending) == 1, pending
+    assert pending[0]["when"].startswith("2026-11-15")
+

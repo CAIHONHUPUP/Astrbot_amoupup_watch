@@ -153,7 +153,7 @@ class WorkEventEngine:
         # 奖金可能引发冲动消费
         if kind == KIND_PROJECT and stable_int("impulse:" + key, 0, 100) < 35:
             try:
-                self._impulse(day_text, key)
+                await self._impulse(day_text, key)
             except Exception as exc:
                 isolated("work.impulse", exc)
         return {"ok": True, "kind": kind, "label": label, "amount_cents": amount,

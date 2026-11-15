@@ -6,10 +6,10 @@ import datetime as _dt
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import stable_int, yuan
+    from ..utils.helpers import stable_int
 except ImportError:
     from guard import isolated
-    from utils.helpers import stable_int, yuan
+    from utils.helpers import stable_int
 
 BAD = [
     ("手机屏幕摔碎", 80000, "手机啪一下掉地上，屏幕碎了……换屏 800，心也跟着碎了。"),

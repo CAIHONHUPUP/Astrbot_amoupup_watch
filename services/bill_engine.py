@@ -21,7 +21,7 @@ def summary(plugin, now=None):
     today = now.date()
     month = (now.year, now.month)
     today_cents = month_cents = 0
-    groups = {}
+    groups = {}  # type: ignore[var-annotated]
     for it in _items(plugin):
         try:
             when = _dt.datetime.fromtimestamp(float(it.get("ts") or 0))

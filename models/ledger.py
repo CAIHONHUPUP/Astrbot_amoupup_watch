@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import time
 
 try:
@@ -249,6 +250,63 @@ class FinanceRepo:
     def set_npc_event(self, name, text):
         return self.store.write("UPDATE npc_relations SET last_event=?, updated_at=? WHERE name=?",
                                 (str(text)[:120], time.time(), str(name)))
+
+    # ---------- 社交事件流水（面板「最近关系动态」） ----------
+    def event_exists(self, idem):
+        if not idem:
+            return False
+        return bool(self._rows("SELECT 1 FROM events WHERE idem=? LIMIT 1", (str(idem),)))
+
+    def add_event(self, kind, text="", npc="", status="", amount_cents=0,
+                  day="", extra=None, weight=0.0, idem=""):
+        """写一条社交事件：payload 存结构化事实，text 只放她/对方真实说过的原话。
+
+        面板只读这张表，所以**必须**在结算成功后才写；失败不写、也绝不占冷却。
+        """
+        payload = {"text": str(text or ""), "npc": str(npc or ""),
+                   "status": str(status or ""), "amount_cents": int(amount_cents or 0)}
+        if isinstance(extra, dict):
+            payload.update(extra)
+        idem = str(idem or "")
+        if idem and self.event_exists(idem):
+            return False
+        try:
+            return self.store.write(
+                "INSERT INTO events(day, kind, weight, payload, created_at, gen, idem) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (str(day or time.strftime("%Y-%m-%d")), str(kind or "social"), float(weight or 0),
+                 json.dumps(payload, ensure_ascii=False), time.time(), "social", idem))
+        except Exception:
+            return False
+
+    def events(self, limit=10):
+        """最近 N 条社交事件（新的在前），payload 已解析成 dict。"""
+        rows = self._rows(
+            "SELECT id, day, kind, weight, payload, created_at FROM events "
+            "WHERE gen='social' ORDER BY id DESC LIMIT ?", (max(1, int(limit or 10)),))
+        out = []
+        for row in rows:
+            try:
+                payload = json.loads(str(row.get("payload") or "{}"))
+            except Exception:
+                payload = {}
+            row["payload"] = payload if isinstance(payload, dict) else {}
+            out.append(row)
+        return out
+
+    def prune_npcs(self, keep):
+        """物理锁死名单：只保留 7 个核心 NPC，别处混进来的名字直接清掉。"""
+        names = [str(item) for item in (keep or [])]
+        if not names:
+            return 0
+        marks = ",".join("?" * len(names))
+        return self.store.write("DELETE FROM npc_relations WHERE name NOT IN (%s)" % marks,
+                                tuple(names))
+
+    def set_npc_status(self, name, status, at=0.0):
+        """NPC 自己的生活状态（一句话，7-14 天换一次）。"""
+        return self.store.write("UPDATE npc_relations SET status=?, status_at=?, updated_at=? WHERE name=?",
+                                (str(status)[:60], float(at or 0), time.time(), str(name)))
 
     def add_receivable(self, npc, amount_cents, due_day=""):
         return self.store.write("INSERT INTO receivables(npc, amount_cents, due_day, status, created_at) "

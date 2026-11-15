@@ -6,10 +6,10 @@ import datetime as _dt
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import stable_int, yuan
+    from ..utils.helpers import stable_int
 except ImportError:
     from guard import isolated
-    from utils.helpers import stable_int, yuan
+    from utils.helpers import stable_int
 
 CRASH_WORDS = ("崩溃", "生气", "委屈", "暴躁")
 
@@ -33,7 +33,6 @@ class GambleEngine:
         losers = []
         for pos in positions or []:
             code = str(pos.get("code") or "")
-            quote = (quotes or {}).get(code) or {}
             hist = []
             try:
                 hist = list(self.repo.meta_get("hist:" + code) or [])

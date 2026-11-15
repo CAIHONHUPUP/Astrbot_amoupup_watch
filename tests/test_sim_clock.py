@@ -82,7 +82,7 @@ def make(tmp_path):
     return store, repo, fin
 
 
-def test_salary_pays_once_on_the_15th():
+def test_salary_pays_once_after_weekend():
     class Repo(FinanceRepo):
         pass
 
@@ -94,9 +94,9 @@ def test_salary_pays_once_on_the_15th():
             repo = FinanceRepo(store)
             fin = FakeFinance()
             life = FinanceLife(FakePlugin(), repo, fin)
-            asyncio.run(life.tick(dt.datetime(2026, 11, 15, 10)))
+            asyncio.run(life.tick(dt.datetime(2026, 11, 16, 10)))
             first = sum(1 for c in fin.calls if c[0] == "income")
-            asyncio.run(life.tick(dt.datetime(2026, 11, 15, 11)))
+            asyncio.run(life.tick(dt.datetime(2026, 11, 16, 11)))
             second = sum(1 for c in fin.calls if c[0] == "income")
             assert first == 1 and second == 1     # 同一天只发一次
         finally:
@@ -107,7 +107,7 @@ def test_house_removes_rent_and_adds_fee(tmp_path):
     store, repo, fin = make(tmp_path)
     try:
         life = FinanceLife(FakePlugin(), repo, fin)
-        asyncio.run(life.tick(dt.datetime(2026, 11, 1)))
+        asyncio.run(life.tick(dt.datetime(2026, 11, 2, 9)))
         reasons = [c[1] for c in fin.calls if c[0] == "expense"]
         assert "房租" in reasons
         fin.calls.clear()
@@ -116,7 +116,7 @@ def test_house_removes_rent_and_adds_fee(tmp_path):
         prop = FinanceProperty(plugin, repo, fin, life)
         plugin.finance_property = prop
         life.plugin = plugin
-        asyncio.run(life.tick(dt.datetime(2026, 12, 1)))
+        asyncio.run(life.tick(dt.datetime(2026, 12, 1, 9)))
         reasons = [c[1] for c in fin.calls if c[0] == "expense"]
         assert "房租" not in reasons
         assert "物业费" in reasons

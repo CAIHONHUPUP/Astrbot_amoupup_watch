@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 from types import SimpleNamespace
 from unittest import mock
 
@@ -62,7 +63,7 @@ def test_penalty_not_recorded_when_expense_fails():
             mock.patch.object(bill_flow, "unpaid", lambda rows: rows), \
             mock.patch.object(bill_flow, "stage_of", lambda rows, ts: 1), \
             mock.patch.object(bill_flow, "save_due", lambda *a, **k: None):
-        asyncio.run(bill_flow.overdue_tick(_plugin(finance)))
+        asyncio.run(bill_flow.overdue_tick(_plugin(finance), dt.datetime(2026, 11, 3, 9, 30)))
     assert "penalty" not in row
     assert finance.memories == []
     assert finance.calls and finance.calls[0][0] > 0
@@ -75,6 +76,6 @@ def test_penalty_recorded_when_expense_succeeds():
             mock.patch.object(bill_flow, "unpaid", lambda rows: rows), \
             mock.patch.object(bill_flow, "stage_of", lambda rows, ts: 1), \
             mock.patch.object(bill_flow, "save_due", lambda *a, **k: None):
-        asyncio.run(bill_flow.overdue_tick(_plugin(finance)))
+        asyncio.run(bill_flow.overdue_tick(_plugin(finance), dt.datetime(2026, 11, 3, 9, 30)))
     assert row["penalty"] == 5000
     assert finance.memories and "滞纳金" in finance.memories[0]

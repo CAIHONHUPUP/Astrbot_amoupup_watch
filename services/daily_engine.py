@@ -155,8 +155,15 @@ class FinanceDaily:
                 score = self.plugin.finance.mood().get("score")
             except Exception:
                 score = None
+            early_until = ""
+            try:
+                early_until = str(self.repo.meta_get("salary_early_until", "") or "")
+            except Exception:
+                early_until = ""
+            # 提前发工资后的几天，冲动消费/逛街概率明显提高
+            boost = bool(early_until and day <= early_until)
             mood_edge = score is not None and (float(score) >= 75 or float(score) <= 35)
-            if mood_edge and _hash_int("impulse:" + day, 0, 100) < 25:
+            if (mood_edge or boost) and _hash_int("impulse:" + day, 0, 100) < (45 if boost else 25):
                 roll = _hash_int("impulse_pick:" + day, 0, 100)
                 if roll < 40:
                     out.append(await self.consume.buy_item("奶茶", 1, idem="impulse:" + day, when="impulse"))

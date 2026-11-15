@@ -194,3 +194,40 @@ class ToolWrappersMixin:
                 from core.llm_tools import propose_date_tool
 
             return await propose_date_tool(self, activity, time)
+
+
+        @_optional_hook("llm_tool")("accept_social_event")
+        async def accept_social_event(self, event, npc: str = "", place: str = "",
+                                      amount: float = 0.0, note: str = "",
+                                      start: str = "", end: str = "",
+                                      about_user: str = ""):
+            """接受朋友或家人的邀约（逛街/吃饭/随礼/借钱）：会真实扣款、占用日程、写记忆和日记。
+
+            金额绝不允许超过可用余额；借钱时钱不够可以少借（自己传 amount）。
+            """
+            try:
+                from .core.llm_tools import accept_social_event_tool
+            except ImportError:
+                from core.llm_tools import accept_social_event_tool
+            return await accept_social_event_tool(self, npc, place, amount, note, start, end,
+                                                  about_user)
+
+
+        @_optional_hook("llm_tool")("reject_social_event")
+        async def reject_social_event(self, event, reason: str = "", note: str = ""):
+            """婉拒邀约：说清真实理由（太累/没钱/不想去），不扣钱也不占日程。"""
+            try:
+                from .core.llm_tools import reject_social_event_tool
+            except ImportError:
+                from core.llm_tools import reject_social_event_tool
+            return await reject_social_event_tool(self, reason, note)
+
+
+@_optional_hook("llm_tool")("modify_date")
+async def modify_date_tool(self, event, activity: str = "", time: str = ""):
+    """老公改时间：新的时间顶掉旧的 pending，日程里只留一条。"""
+    try:
+        from .core.llm_tools import propose_date_tool
+    except ImportError:
+        from core.llm_tools import propose_date_tool
+    return await propose_date_tool(self, activity, time)
