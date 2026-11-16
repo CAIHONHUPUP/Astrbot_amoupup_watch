@@ -50,7 +50,13 @@ try:  # 包模式
 except ImportError:  # 直接按文件加载
     from core import jobs
 
+try:
+    from .utils.clock import configure as _configure_clock
+except ImportError:
+    from utils.clock import configure as _configure_clock
+
 _PKG = __package__ or ""
+_configure_clock("Asia/Shanghai")
 
 ApiMixin = _load(_PKG, "api.handlers", "ApiMixin")
 CardMixin = _load(_PKG, "ui.cards", "CardMixin")
@@ -81,7 +87,7 @@ ROUTES = _load(_PKG, "api.routes", "ROUTES")
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
-PLUGIN_VERSION = "1.0.7"
+PLUGIN_VERSION = "1.0.8"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag", "finance"]
 
@@ -376,8 +382,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
                 base += ("\n【约会现场】老公就在你身边，你们正在一起约会；不要问“你在哪/你怎么还没来”，"
                          "可以有挽手、指东西、笑这类动作和现场对话。")
             request.system_prompt = base
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("llm.request.prompt", exc)
     async def money_cmd(self, event: AstrMessageEvent):
         try:
             from .services.menu import money_reply
@@ -453,8 +459,22 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
     async def on_recommend(self, event):
         """用户说「建议买 600519/贵州茅台」：只入候选池，不买入。"""
         text = str(getattr(event, "message_str", "") or "").strip()
-        if not re.search(r"(建议|推荐).{0,4}买", text):
+        fund_hit = ("基金" in text and "买" in text)
+        if not fund_hit and not re.search(r"(建议|推荐).{0,4}买", text):
             return
+        if fund_hit:
+            try:
+                try:
+                    from .core.fund_pool import FundPool
+                except ImportError:
+                    from core.fund_pool import FundPool
+                found = FundPool(self).recommend(text)
+            except Exception as exc:
+                isolated("finance.fund_recommend", exc)
+                found = []
+            if found:
+                yield event.plain_result("记下了，已放进基金候选池（不买入）：%s" % "、".join(found))
+                return
         try:
             result = self.finance_pools.recommend(text) if self.finance_pools else {"ok": False, "message": "候选池未就绪"}
         except Exception as exc:
@@ -466,8 +486,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
                     "%s 用户建议买 %s，已放进候选池（7 天有效，不买入）" % (
                         time.strftime("%Y-%m-%d %H:%M"), result.get("code")),
                     kind="finance", idem="rec:" + str(result.get("code")) + ":" + time.strftime("%Y%m%d"))
-            except Exception:
-                pass
+            except Exception as exc:
+                isolated("finance.recommend.memory", exc)
         yield event.plain_result(result.get("message") or "记下了")
     async def on_transfer(self, event):
         try:
@@ -491,8 +511,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         if admin:
             try:
                 await note_transfer(self, getattr(event, "message_str", ""))
-            except Exception:
-                pass
+            except Exception as exc:
+                isolated("finance.note_transfer", exc)
         try:
             from .services.late_night_engine import maybe_soothe
         except ImportError:
@@ -503,20 +523,23 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             from services.gift_engine import maybe_transfer as gift_transfer
         try:
             gift_msg = await gift_transfer(self, getattr(event, "message_str", ""))
-        except Exception:
+        except Exception as exc:
+            isolated("finance.gift_transfer", exc)
             gift_msg = None
         if gift_msg and gift_msg.get("message"):
             message = (message + "\n" if message else "") + gift_msg["message"]
         try:
             soothe = await maybe_soothe(self, getattr(event, "message_str", ""))
-        except Exception:
+        except Exception as exc:
+            isolated("finance.soothe_transfer", exc)
             soothe = None
         if soothe and soothe.get("message"):
             message = (message + "\n" if message else "") + soothe["message"]
         if admin:
             try:
                 comp = await maybe_compensate(self, getattr(event, "message_str", ""))
-            except Exception:
+            except Exception as exc:
+                isolated("finance.compensate", exc)
                 comp = None
         else:
             comp = None
@@ -532,8 +555,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             from services.shopping_engine import handle_reply
         try:
             await handle_reply(self, str(getattr(event, "message_str", "") or ""))
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("shopping.reply", exc)
 
     async def pay_bill_cmd(self, event, text=""):
         try:

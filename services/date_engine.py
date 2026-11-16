@@ -584,10 +584,6 @@ async def _attend_open(plugin, title, now):
     finance = _finance(plugin)
     cash = int(finance.balance_cents() or 0) if finance is not None and hasattr(finance, "balance_cents") else 0
     idem = "date:attend:%s" % int(now.timestamp())
-    try:
-        when_dt = _dt.datetime.strptime(str(target.get("when")), "%Y-%m-%d %H:%M")
-    except Exception:
-        when_dt = now
     title = str(target.get("title") or "约会")
     # 先把她切到「约会中」，再扣钱：否则财务日程会记在「家」，出现「在家买单」
     amo_early = _amo(plugin)
@@ -645,7 +641,7 @@ async def _attend_bill(finance, pay, target, idem, amo_early):
                         amo_early.set_date_now("", 0)
                         amo_early.set_current_action("", 0)
                     except Exception:
-                        pass
+                        pass  # cleanup: best-effort
                 return {"ok": False, "message": "钱包不够，约会泡汤了……"}
         except Exception:
             return {"ok": False, "message": "约会结算失败"}
@@ -749,7 +745,7 @@ async def _attend_amo_schedule(amo, now, end, title, when_label, company, target
         try:
             amo.set_date_meet(title, place)
         except (AttributeError, TypeError):
-            pass
+            pass  # cleanup: best-effort
         amo.set_current_action("正在和老公约会", end.timestamp(),
                                place="外面", zone="restaurant", category="social")
     except Exception as exc:
@@ -960,9 +956,9 @@ async def finish_date(plugin, now=None, reason="timeout"):
                 try:
                     ama.set_date_separation(title, now.timestamp())
                 except (AttributeError, TypeError):
-                    pass
+                    pass  # cleanup: best-effort
             except (TypeError,):
-                pass
+                pass  # cleanup: best-effort
             ama.set_date_now("", 0)
             try:
                 home_at = (now + _dt.timedelta(minutes=10)).strftime("%H:%M")
@@ -995,7 +991,7 @@ async def finish_date(plugin, now=None, reason="timeout"):
             try:
                 ama.set_date_ending(ending_fact, reason=reason)
             except (AttributeError, TypeError):
-                pass
+                pass  # cleanup: best-effort
             _date_loot(ama, title)
         except Exception as exc:
             isolated("date_engine.finish_date.2", exc)
@@ -1066,11 +1062,11 @@ async def replan_remaining(plugin, ama, now, title=""):
     try:
         mood = str((finance.mood() or {}).get("word") or "平静")
     except Exception:
-        pass
+        pass  # cleanup: best-effort
     try:
         fatigue = int(finance.fatigue() or 0)
     except Exception:
-        pass
+        pass  # cleanup: best-effort
     prompt = ("现在是 %s。你们刚在%s结束约会、买完单，正准备一起回家（你们住在一起，不是分开）。\n"
               "她现在的状态：心情%s，疲惫值%d。\n"
               "请把 %s 到 23:00 的时间安排成 2-4 条日程，首尾相接、不重叠，"

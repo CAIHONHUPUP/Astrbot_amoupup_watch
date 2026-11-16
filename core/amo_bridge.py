@@ -253,8 +253,8 @@ class FinanceLink:
                 return
             now = int(repo.meta_get(key, 0) or 0)
             repo.meta_set(key, now + int(cents))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
 
     # ---------- 写：内部小工具（每步单独兜底） ----------
     def _nudge(self, amo, idem, deltas):
@@ -433,8 +433,8 @@ class FinanceLink:
                 int(amount_cents) / 100.0,
                 item_name or reason, trigger_reason or reason,
                 int(self.balance_cents() or 0) / 100.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("finance.expense.log", exc)
         self._count("half_expense_cents", int(amount_cents))
         level = expense_level(int(amount_cents), necessary=necessary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"]) if level["deltas"] else True
@@ -451,8 +451,8 @@ class FinanceLink:
             from ..services.bill_engine import prompt_line
             if hasattr(amo, "note_expense_summary"):
                 amo.note_expense_summary(prompt_line(self))
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("finance.expense.summary", exc)
         return {"ok": True, "mood": after, "steps": steps}
 
     async def trade_pnl(self, pnl_cents, ratio, symbol, idem):
@@ -529,8 +529,8 @@ class FinanceLink:
                 loop = asyncio.get_running_loop()
                 loop.create_task(rewrite_and_save(self, amo, str(text)))
                 return True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         return self._small_diary(amo, str(text))
 
     def add_schedule(self, day, activity, detail="", place="家", category="leave",
@@ -604,8 +604,8 @@ class FinanceLink:
             health = getattr(getattr(amo, "state", None), "health", {}) or {}
             if str(health.get("status") or "") == "疲惫":
                 value = max(value, 60.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("finance.health_read", exc)
         return max(0, min(100, int(round(value))))
 
     def set_current_action(self, action, until_ts=0, place="外面", zone="restaurant", category="social"):
@@ -667,6 +667,10 @@ class FinanceLink:
                 ("+" if pnl_cents >= 0 else "-") + yuan(abs(int(pnl_cents))), float(pnl_pct) * 100,
                 holding_qty, unit, word)
         ok = await self._tier("long", text, idem + ":mem", tag="trade")
+        try:
+            self.small_diary(text)
+        except Exception as exc:
+            isolated("finance.trade.diary", exc)
         return {"ok": bool(ok), "verified": bool(ok)}
 
     async def record_daily_pnl(self, items, total_pnl_cents, idem=""):

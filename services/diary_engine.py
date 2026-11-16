@@ -2,6 +2,9 @@
 """小日记：把真实事件交给 LLM 写成人话，失败回退事实陈述。"""
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 
 FACT_RULES = (
     "【事实分级·最高优先级】\n"
@@ -60,5 +63,5 @@ async def rewrite_and_save(bridge, amo, hint):
     except Exception:
         try:
             bridge._small_diary(amo, str(hint or ""))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)

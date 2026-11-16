@@ -223,6 +223,43 @@ class ToolWrappersMixin:
             return await reject_social_event_tool(self, reason, note)
 
 
+        @_optional_hook("llm_tool")("buy_stock")
+        async def buy_stock(self, event, code: str = "", qty: int = 100, price: float = 0.0):
+            """她决定买入股票时调用：真实行情/余额/手续费校验。"""
+            try:
+                from .core.llm_tools import buy_stock_tool
+            except ImportError:
+                from core.llm_tools import buy_stock_tool
+            return await buy_stock_tool(self, event, code, qty, price)
+
+        @_optional_hook("llm_tool")("sell_stock")
+        async def sell_stock(self, event, code: str = "", qty: int = 100, price: float = 0.0):
+            """她决定卖出股票时调用：更新持仓、入账并写流水。"""
+            try:
+                from .core.llm_tools import sell_stock_tool
+            except ImportError:
+                from core.llm_tools import sell_stock_tool
+            return await sell_stock_tool(self, event, code, qty, price)
+
+        @_optional_hook("llm_tool")("buy_fund")
+        async def buy_fund(self, event, code: str = "", amount: float = 0.0, nav: float = 0.0):
+            """她决定申购基金时调用：amount 是元；扣款、持仓、流水。"""
+            try:
+                from .core.llm_tools import buy_fund_tool
+            except ImportError:
+                from core.llm_tools import buy_fund_tool
+            return await buy_fund_tool(self, event, code, amount, nav)
+
+        @_optional_hook("llm_tool")("sell_fund")
+        async def sell_fund(self, event, code: str = "", shares: float = 0.0, nav: float = 0.0):
+            """她决定赎回基金时调用：份额、手续费、T+7 到账。"""
+            try:
+                from .core.llm_tools import sell_fund_tool
+            except ImportError:
+                from core.llm_tools import sell_fund_tool
+            return await sell_fund_tool(self, event, code, shares, nav)
+
+
 @_optional_hook("llm_tool")("modify_date")
 async def modify_date_tool(self, event, activity: str = "", time: str = ""):
     """老公改时间：新的时间顶掉旧的 pending，日程里只留一条。"""

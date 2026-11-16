@@ -147,8 +147,8 @@ async def finance_tick(plugin):
                     amo = plugin.finance._amo() if hasattr(plugin.finance, "_amo") else None
                     if amo is not None and hasattr(amo, "on_forced_overtime"):
                         amo.on_forced_overtime()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[WATCH] overtime notify skipped: %r", exc)
         # 下面这些和 work_events 无关：以前缩进在 if 里，职场模块一出错就全不跑
         await plugin._guard_step("fortune", plugin.fortune.monthly_roll(_dt.datetime.now()))
         await plugin._guard_step("lending", plugin.lending.repay_tick(_dt.datetime.now()))

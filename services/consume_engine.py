@@ -2,6 +2,9 @@
 """单品级消费：按现实物价扣款，一项一条，不合并、不虚构。"""
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import time
 
 from .city import current_city, factor_of
@@ -58,8 +61,8 @@ class FinanceConsume:
             try:
                 mod.record(time.strftime("%Y-%m-%d"), category_for(name),
                            "%s × %d" % (name, qty), amount, idem)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         return {
             "ok": True,
             "item": name, "qty": qty, "unit_cents": price, "amount_cents": amount,

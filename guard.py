@@ -67,7 +67,7 @@ def isolated(scope: str, exc: BaseException, limit: int = _LIMIT, window: float 
             "[WATCH] isolated scope=%s err=%s: %s count=%d trace_id=%s",
             scope, type(exc).__name__, exc, count, tid,
         )
-    except Exception:
+    except Exception:  # cleanup: logging must never recurse
         pass
     # 只有 main.py 给 file_logger 挂了 RotatingFileHandler 才写文件；
     # 没挂时直接跳过，避免 traceback 顺着 root logger 冒进 AstrBot 日志。
@@ -77,7 +77,7 @@ def isolated(scope: str, exc: BaseException, limit: int = _LIMIT, window: float 
                 "[WATCH] isolated scope=%s trace_id=%s", scope, tid,
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
-        except Exception:
+        except Exception:  # cleanup: file logger is optional
             pass
     return tid
 

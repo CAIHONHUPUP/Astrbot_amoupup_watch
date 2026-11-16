@@ -121,12 +121,14 @@ def test_leader_invite_moves_to_weekday():
     assert dt.date.fromisoformat(out["invite"]["day"]).weekday() < 5
 
 
-def test_friend_weekday_daytime_moves_to_weekend():
+def test_friend_weekday_daytime_moves_to_evening():
     eng, repo, fin = _engine()
     out = asyncio.run(eng.create_invite(now=MON, composer=_composer(
         day="2026-11-17", start="14:00", end="17:00")))
     assert out["ok"]
-    assert dt.date.fromisoformat(out["invite"]["day"]).weekday() >= 5
+    invite = out["invite"]
+    assert dt.date.fromisoformat(invite["day"]).weekday() < 5
+    assert int(invite["start"][:2]) >= 18
 
 
 def test_conflicting_slot_moves_to_next_free_day():

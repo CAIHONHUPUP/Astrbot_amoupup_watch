@@ -226,6 +226,10 @@
     <div class="card">
       <div class="card-h"><h2>行情</h2><span class="tag" id="marketTag">今日 0/2</span><span class="tag" id="marketSrc">腾讯 qt.gtimg.cn</span></div>
       <div class="mood-line" id="marketLine">每天三次：9:30 早盘 / 11:30 午间 / 14:50 收盘前；只查实际持仓</div>
+      <details style="margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">
+        <summary style="cursor:pointer;font-size:13px;color:var(--muted)">行情明细</summary>
+        <div id="marketDetail" style="margin-top:8px"></div>
+      </details>
     </div>
 
     <div class="card">
@@ -452,7 +456,7 @@
     renderMarket(d.market || {});
     renderDecision(d.decision || {});
     renderHelp(d.help || {});
-    renderTrades(d.trades || []);
+    renderTrades(d.flow || d.trades || []);
   }
 
   function positions() {
@@ -569,7 +573,19 @@
   function renderMarket(m) {
     q("marketTag").textContent = "今日 " + (m.checks || 0) + "/" + (m.limit || 2);
     q("marketSrc").textContent = m.source || "腾讯 qt.gtimg.cn";
-    q("marketLine").textContent = m.last || "每天三次：9:30 早盘 / 11:30 午间 / 14:50 收盘前；只查实际持仓";
+    q("marketLine").textContent = m.note || m.last || "每天三次：9:30 早盘 / 11:30 午间 / 14:50 收盘前；只查实际持仓";
+    var detail = q("marketDetail");
+    if (detail) {
+      var rows = (m.stocks || []).concat(m.funds || []);
+      detail.innerHTML = rows.length ? rows.map(function (r) {
+        var pct = Number(r.change_pct || 0);
+        return "<div class=\"bill\"><div><div>" + esc(r.kind + " · " + r.code) + "</div>" +
+          "<div class=\"n\">" + esc(r.name) + "</div></div>" +
+          "<div class=\"right\"><div>" + money(r.price) + "</div>" +
+          "<div class=\"n\" style=\"color:" + (pct > 0 ? "#c0392b" : (pct < 0 ? "#1e8449" : "inherit")) + "\">" +
+          (pct > 0 ? "+" : "") + pct.toFixed(2) + "%</div></div></div>";
+      }).join("") : "<div class=\"sub\">暂无行情明细</div>";
+    }
   }
 
   function renderBank(b) {
@@ -764,7 +780,7 @@
       (d.npcs || []).forEach(function (n) {
         var aff = n.affinity || 0;
         var owed = n.borrowed_from_her ? (" · 欠我 ¥" + (n.borrowed_from_her / 100).toFixed(2)) : "";
-        var sub = [n.last_event, n.status].filter(Boolean).join(" · ") || "最近没动静";
+        var sub = n.last_event || n.status || "最近没动静";
         html += '<div class="item"><div class="k">' + n.name + '（' + n.relation + '）</div>'
           + '<div class="v">好感 ' + aff + ' / 100</div>'
           + '<div class="s">' + sub + owed + '</div></div>';
@@ -804,12 +820,13 @@
       return true;
     });
     if (!list.length) {
-      box.innerHTML = '<div class="empty" style="grid-column:1/-1">还没有关系事件<br><span>她答应的邀约、收到和花出的钱都会记在这里</span></div>';
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无动态<br><span>有邀约、随礼、答应或婉拒时才会记在这里</span></div>';
       return;
     }
     var pad = function (n) { return ("0" + n).slice(-2); };
     var label = function (kind) {
       var k = String(kind || "");
+      if (k.indexOf("status") >= 0) return "近况";
       if (k.indexOf("invite") >= 0) return "邀约";
       if (k.indexOf("accept") >= 0) return "答应了";
       if (k.indexOf("reject") >= 0) return "婉拒";

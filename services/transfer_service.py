@@ -2,6 +2,9 @@
 """用户 [转账] 入账：注资 + 补交搬家费。"""
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import re
 
 try:
@@ -32,8 +35,8 @@ async def handle_transfer(plugin, text):
                 amo = finance._amo()
             if amo is not None and hasattr(amo, "note_transfer_event"):
                 amo.note_transfer_event(cents)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         try:
             from .city import settle_pending_fee
         except ImportError:

@@ -9,6 +9,9 @@
 """
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import datetime as _dt
 import time
 
@@ -75,8 +78,8 @@ class FinanceHelp:
         try:
             for item in self.repo.assets():
                 market_value += int(item.get("value_cents") or 0)   # 房产/车辆计入总资产
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         return int(cash + market_value - debt)
 
     def status(self):
@@ -144,8 +147,8 @@ class FinanceHelp:
             return {"ok": False, "message": "转账入账失败"}
         try:
             self.finance.mark_withdrawable(int(amount_cents), idem + ":w")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         if self._episode_open():
             self._close_episode("user")
         return {"ok": True, "message": "收到转账 %.2f 元" % (int(amount_cents) / 100.0)}

@@ -56,7 +56,7 @@ def refresh(repo, now=None):
         try:
             repo.set_npc_status(name, pick, stamp)
         except Exception:
-            pass
+            pass  # cleanup: best-effort
         out[name] = pick
     return out
 

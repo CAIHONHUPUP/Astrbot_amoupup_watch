@@ -58,6 +58,12 @@ class FinanceDecision:
                 price = quote.get("price") if isinstance(quote, dict) else None
                 if not price:
                     continue
+                try:
+                    self.repo.cache_quote(today, code, int(round(float(price) * 100)),
+                                          int(round(float(quote.get("prev_close") or price) * 100)),
+                                          str(quote.get("name") or ""))
+                except Exception as exc:
+                    isolated("finance.quote.cache", exc)
                 key = "hist_day:%s:%s" % (code, today)
                 if self.repo.meta_get(key):
                     continue
@@ -142,6 +148,34 @@ class FinanceDecision:
         if failure is not None:
             return failure
         cash = self.finance.balance_cents() or 0
+        fund_text = ""
+        self._fund_codes = set()
+        if slot == "close":
+            try:
+                try:
+                    from ..core.fund_pool import FundPool
+                    from ..services.fund_api import fetch_fund_quotes
+                except ImportError:
+                    from core.fund_pool import FundPool
+                    from services.fund_api import fetch_fund_quotes
+                pool = FundPool(self.plugin)
+                fund_codes = pool.codes(day)
+                fund_quotes = await self.runtime.run_io(fetch_fund_quotes, fund_codes, timeout=12) or {}
+                pool.observe(fund_quotes, day)
+                try:
+                    import json as _json
+                    self.repo.meta_set("fund_quotes", _json.dumps(fund_quotes, ensure_ascii=False))
+                except Exception as exc:
+                    isolated("finance.fund.quotes_save", exc)
+                self._fund_codes = set(fund_codes)
+                lines = ["%s %s 净值%.4f 估算涨跌%+.2f%%" % (
+                    q.get("code"), q.get("name") or "", float(q.get("nav") or 0),
+                    float(q.get("change_pct") or 0)) for q in fund_quotes.values()]
+                fund_text = ("现在是14:50，距离基金交易截止还有10分钟。可用余额 %.2f 元。\n"
+                             "基金候选（可申购/加仓/赎回，也可以不买）：\n%s" %
+                             (int(cash) / 100.0, "\n".join(lines) or "今天没有拉到基金净值"))
+            except Exception as exc:
+                isolated("finance.fund.facts", exc)
         mood = self.finance.mood()
         try:
             gamble = getattr(self.plugin, "gamble", None)
@@ -156,7 +190,7 @@ class FinanceDecision:
         news_text, failure = await self._slot_news(positions, now, day)
         if failure is not None:
             return failure
-        decision = await self._slot_decision(now, cash, positions, quotes, mood, news_text, llm_decide)
+        decision = await self._slot_decision(now, cash, positions, quotes, mood, news_text, llm_decide, fund_text=fund_text)
         if not decision:
             decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
                                    random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
@@ -246,7 +280,7 @@ class FinanceDecision:
             isolated("finance.news.inject", exc)
         return news_text, None
 
-    async def _slot_decision(self, now, cash, positions, quotes, mood, news_text, llm_decide):
+    async def _slot_decision(self, now, cash, positions, quotes, mood, news_text, llm_decide, fund_text=""):
         """决策输入：可用标的、相关记忆、银行/保险提示，交给 llm_decide。"""
         decision = None
         if self.plugin is not None:
@@ -258,8 +292,10 @@ class FinanceDecision:
             if tm is not None:
                 memory_text = tm.context_text([p["code"] for p in positions] + list(allowed), limit=18)
             bank_line = self._slot_bank_line(now)
+            allowed |= set(getattr(self, "_fund_codes", set()) or set())
             decision = await llm_decide(self.plugin, cash, positions, quotes, mood.get("word"), allowed,
-                                        news_text, (memory_text + "\n" + bank_line).strip())
+                                        news_text, (memory_text + "\n" + bank_line).strip(),
+                                        fund_text=fund_text)
         return decision
 
     def _slot_bank_line(self, now):
@@ -335,11 +371,15 @@ class FinanceDecision:
     async def _execute(self, slot, decision, now):
         idem = "decision:%s:%s" % (now.date().isoformat(), slot)
         if decision.get("action") == "deposit":
-            try:
-                from ..services.bank_engine import build_bank
-            except ImportError:
-                from services.bank_engine import build_bank
-            bank = getattr(self.plugin, "bank", None) or build_bank(self.plugin)
+            bank = getattr(self.plugin, "bank", None)
+            if bank is None and callable(getattr(self.plugin, "_bank", None)):
+                bank = await self.plugin._bank()
+            if bank is None:
+                try:
+                    from ..services.bank_engine import build_bank
+                except ImportError:
+                    from services.bank_engine import build_bank
+                bank = build_bank(self.plugin)
             self.plugin.bank = bank
             amount = int(decision.get("amount_cents") or 0)
             term = int(decision.get("term_months") or 0)
@@ -348,6 +388,12 @@ class FinanceDecision:
                 label = "活期" if not term else "定期%d个月" % term
                 return {"ok": True, "message": "存了 %.2f 元%s" % (amount / 100.0, label)}
             return {"ok": False, "message": "存款没成功（%s）" % (out.get("reason") or "unknown")}
+        if decision["action"] == "buy_fund" and decision.get("code"):
+            return await self.trading.subscribe(
+                decision["code"], int(decision.get("amount_cents") or 0), None, idem + ":fundbuy")
+        if decision["action"] == "sell_fund" and decision.get("code"):
+            return await self.trading.redeem(
+                decision["code"], float(decision.get("shares") or 0), None, idem + ":fundsell")
         if decision["action"] == "buy" and decision.get("code"):
             return await self.trading.buy(decision["code"], decision.get("qty", 100), None, idem + ":buy")
         if decision["action"] == "sell" and decision.get("code") and decision.get("qty"):
@@ -441,7 +487,7 @@ class FinanceDecision:
                 amo = self.finance._amo() if hasattr(self.finance, "_amo") else None
                 if amo is not None and hasattr(amo, "on_big_stock_loss"):
                     amo.on_big_stock_loss()
-        except Exception:
-            pass
+        except Exception as exc:
+            isolated("finance.big_loss_notify", exc)
         self.repo.meta_set(flag, "1")
         return {"ok": True, "total_pnl": total / 100.0, "items": len(items)}

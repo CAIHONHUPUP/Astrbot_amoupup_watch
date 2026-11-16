@@ -11,18 +11,20 @@
 from __future__ import annotations
 
 import datetime as _dt
+import difflib
 import json
+import re
 import time
 import uuid
 
 try:
     from ..guard import isolated
-    from ..utils.helpers import stable_int
+    from ..utils.helpers import is_holiday, stable_int
     from ..utils.humanize import human_money, humanize_numbers
     from . import npc_roster, npc_status
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
-    from utils.helpers import stable_int
+    from utils.helpers import is_holiday, stable_int
     from utils.humanize import human_money, humanize_numbers
     from services import npc_roster, npc_status
 
@@ -88,6 +90,56 @@ def parse_when(text, now=None):
     return target, start, end
 
 
+def _day_label(day):
+    """把日期翻成她聊天时会用的人话：工作日 / 周末 / 法定节假日。"""
+    if is_holiday(day):
+        return "法定节假日"
+    return "周末" if day.weekday() >= 5 else "工作日"
+
+
+def _off_day(day):
+    return bool(day.weekday() >= 5 or is_holiday(day))
+
+
+def _brief_status(row):
+    """卡片只留最近的一件事；长期设定（出国/换工作）不跟这次邀约混在一起。"""
+    text = str((row or {}).get("last_event") or (row or {}).get("status") or "最近没什么特别的事").strip()
+    text = re.split(r"[。！？\n]", text, 1)[0].strip()
+    return text[:42]
+
+
+def _nearest_name(name, allowed):
+    name = str(name or "").strip()
+    if name in allowed:
+        return name
+    matches = difflib.get_close_matches(name, list(allowed), n=1, cutoff=0.55)
+    return matches[0] if matches else ""
+
+
+def _relative_label(target, now):
+    delta = (target - now.date()).days
+    if delta == 0:
+        return "今天"
+    if delta == 1:
+        return "明天"
+    if delta == 2:
+        return "后天"
+    return "%d月%d日" % (target.month, target.day)
+
+
+def _retime_ask(text, target, now, start):
+    """邀约日期/时段被常识规则修正后，把微信原话里的“明天/下午”一起改掉，避免文案穿帮。"""
+    out = str(text or "")
+    label = _relative_label(target, now)
+    for word in ("大后天", "后天", "明天", "今天"):
+        if word in out:
+            out = out.replace(word, label)
+    if _minutes(start) >= 18 * 60:
+        for word in ("上午", "中午", "下午", "白天"):
+            out = out.replace(word, "晚上")
+    return out
+
+
 def _ts(day, hhmm, fallback=0.0):
     try:
         return _dt.datetime.strptime("%s %s" % (day, hhmm), "%Y-%m-%d %H:%M").timestamp()
@@ -105,14 +157,51 @@ class SocialEngine:
     def ensure_seed(self):
         if self.repo is None:
             return
+        try:
+            store = getattr(self.repo, "store", None)
+            if store is not None and hasattr(store, "trim_events"):
+                store.trim_events(2)
+        except Exception as exc:
+            isolated("social.seed.trim", exc)
         for name, circle, relation, affinity in SEED:
             if self.repo.npc_get(name) is None:
                 self.repo.upsert_npc(name, circle, relation, affinity, "#社交_" + name)
         self._prune()
+        self._clean_npc_text()
         try:
             npc_status.refresh(self.repo)
         except Exception as exc:
             isolated("social.status", exc)
+
+    def _clean_npc_text(self):
+        """把老数据里被大模型写错的名字（李博达/王博达…）按名单改回来。"""
+        if self.repo is None:
+            return
+        try:
+            rows = self.repo.npcs()
+        except Exception as exc:
+            isolated("social.npc_text.read", exc)
+            return
+        for row in rows:
+            name = str((row or {}).get("name") or "")
+            if name not in npc_roster.NAME_SET:
+                continue
+            for field, setter in (("last_event", self.repo.set_npc_event),
+                                  ("status", None)):
+                text = str((row or {}).get(field) or "")
+                fixed = npc_roster.sanitize(text, name)
+                if field == "last_event" and re.search(r"喜酒|婚礼|满月酒", text) and re.search(r"今天|明天|后天", text):
+                    # 旧数据里“今天说明天喝喜酒”的穿帮动态：直接清掉，卡片回落到现在状态。
+                    fixed = ""
+                if fixed == text:
+                    continue
+                try:
+                    if setter is not None:
+                        setter(name, fixed)
+                    else:
+                        self.repo.set_npc_status(name, fixed, float(row.get("status_at") or 0))
+                except Exception as exc:
+                    isolated("social.npc_text.write", exc)
 
     def _prune(self):
         if getattr(self, "_pruned", False):
@@ -194,10 +283,23 @@ class SocialEngine:
         if self.repo is None:
             return []
         try:
-            rows = list(self.repo.events(int(limit or 10)) or [])
+            limit = max(1, int(limit or 10))
+            # 关系动态只保留 2 天：先物理清掉更老的，再按 created_at 过滤。
+            try:
+                store = getattr(self.repo, "store", None)
+                if store is not None and hasattr(store, "trim_events"):
+                    store.trim_events(2)
+            except Exception as exc:
+                isolated("social.events.trim", exc)
+            rows = list(self.repo.events(limit + 100) or [])
         except Exception as exc:
             isolated("social.events", exc)
             return []
+        cutoff = time.time() - 2 * 86400
+        # 旧版曾把 NPC 长期状态写进事件表；这里兜底过滤，绝不再冒充互动流水。
+        rows = [row for row in rows
+                if str(row.get("kind") or "") != "social:status"
+                and float(row.get("created_at") or 0) >= cutoff][:limit]
         for row in rows:
             payload = row.get("payload") or {}
             row["display"] = humanize_numbers(
@@ -282,13 +384,13 @@ class SocialEngine:
             if isinstance(date_now, dict) and float(date_now.get("until") or 0) > now.timestamp():
                 return "dating"
         except Exception:
-            pass
+            pass  # cleanup: best-effort
         try:
             act = amo.state.current_activity() or {}
             if str(act.get("category") or "") == "sleep":
                 return "sleeping"
         except Exception:
-            pass
+            pass  # cleanup: best-effort
         return ""
 
     def _fatigue(self):
@@ -385,8 +487,9 @@ class SocialEngine:
         for row in rows:
             lines.append("%s（%s，好感 %s）：%s" % (row.get("name"), row.get("relation"),
                                                     row.get("affinity"),
-                                                    str(row.get("status") or "最近没什么特别的事")))
+                                                    _brief_status(row)))
         return {"now": now.strftime("%Y-%m-%d %H:%M %A"),
+                "day_facts": "今天是 %s（%s）" % (now.strftime("%Y-%m-%d %A"), _day_label(now.date())),
                 "npc": "候选（自己挑一个最合适的）",
                 "relation": "、".join(row.get("name") or "" for row in rows),
                 "status": "\n".join(lines),
@@ -401,10 +504,10 @@ class SocialEngine:
         return await compose(self.plugin, facts)
 
     def _normalize(self, now, data, rows):
-        allowed = {row.get("name"): row for row in rows}
-        npc = str(data.get("npc") or "").strip()
-        if npc not in allowed:
-            npc = str(rows[0].get("name")) if len(rows) == 1 else ""
+        allowed = {row.get("name"): row for row in rows if row.get("name")}
+        npc = _nearest_name(data.get("npc"), allowed)
+        if not npc and len(rows) == 1:
+            npc = str(rows[0].get("name") or "")
         if npc not in allowed:
             return None
         row = allowed[npc]
@@ -432,32 +535,53 @@ class SocialEngine:
         if target < now.date():
             target = now.date()
         circle = str(row.get("circle") or "")
-        # 常识：喜酒提前 ≥3 天；领导约工作日；闺蜜约周末（白天）
-        if kind == "ceremony" and (target - now.date()).days < CEREMONY_LEAD_DAYS:
-            target = now.date() + _dt.timedelta(days=CEREMONY_LEAD_DAYS)
-        if circle == "work" and target.weekday() >= 5:
-            target += _dt.timedelta(days=7 - target.weekday())
-        if circle == "friend" and target.weekday() < 5 and _minutes(start) < 18 * 60:
-            target += _dt.timedelta(days=5 - target.weekday())
-        # 冲突：挪到下一个空的日子（最多试 7 天）
-        for _ in range(7):
+
+        # 硬常识：酒席只能周末/节假日且提前 ≥3 天；工作日白天朋友约只能改晚上；
+        # 领导约饭只能下班后。日期/时段被改后，微信原话里的“明天/下午”同步改掉。
+        if kind == "ceremony":
+            target = max(target, now.date() + _dt.timedelta(days=CEREMONY_LEAD_DAYS))
+            for _ in range(21):
+                if _off_day(target):
+                    break
+                target += _dt.timedelta(days=1)
+            else:
+                return None
+            start, end = "11:00", "13:00"
+        elif circle == "work":
+            while _off_day(target):
+                target += _dt.timedelta(days=1)
+            if kind in ("meal", "drink") and _minutes(start) < 18 * 60:
+                start, end = "19:00", "20:30"
+        elif circle == "friend" and kind in ("meal", "drink", "shopping", "other"):
+            if not _off_day(target) and _minutes(start) < 18 * 60:
+                start, end = "19:00", "21:00"
+
+        # 冲突：挪到下一个空的日子（最多试 14 天；酒席仍只能落在休息日）
+        for _ in range(14):
             day_text = target.isoformat()
             if not start or not self._conflict(day_text, start, end):
                 break
             target += _dt.timedelta(days=1)
+            if kind == "ceremony":
+                while not _off_day(target):
+                    target += _dt.timedelta(days=1)
         else:
             return None
         budget = int(data.get("budget_cents") or 0)
         if budget <= 0:
             budget = KIND_BUDGET.get(kind, 10000)
-        ask = humanize_numbers(npc_roster.sanitize(data.get("ask") or "", npc))
+        ask = _retime_ask(str(data.get("ask") or ""), target, now, start)
+        wrong_name = str(data.get("npc") or "").strip()
+        if wrong_name and wrong_name != npc:
+            ask = ask.replace(wrong_name, npc)
+        ask = humanize_numbers(npc_roster.sanitize(ask, npc))
         if not ask:
             return None
         return {
             "token": "soc-%s-%s" % (day_text, uuid.uuid4().hex[:8]),
             "kind": kind, "topic": str(data.get("topic") or "").strip()[:20],
             "npc": npc, "relation": str(row.get("relation") or ""), "circle": circle,
-            "status": str(row.get("status") or ""),
+            "status": _brief_status(row),
             "place": place, "day": day_text, "start": start, "end": end, "zone": zone,
             "amount_cents": budget, "created": now.timestamp(),
             "expires": now.timestamp() + INVITE_TTL_HOURS * 3600, "ask": ask,
@@ -532,6 +656,7 @@ class SocialEngine:
         cash = self._cash()
         cost = int(inv.get("amount_cents") or 0)
         lines = [
+            "【当前时间事实】%s（%s）" % (now.strftime("%Y-%m-%d %A"), _day_label(now.date())),
             npc_roster.ROSTER_LINE,
             "【社交邀约·真实发生】%s（%s）发微信给你：" % (inv.get("npc"), inv.get("relation") or ""),
             "「%s」" % str(inv.get("ask") or ""),

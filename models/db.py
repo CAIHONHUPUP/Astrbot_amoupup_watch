@@ -203,11 +203,11 @@ class Store:
     # ---------------- 生命周期（都在 DB 线程里调） ----------------
     def init(self) -> dict:
         self.root.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path), timeout=5.0, check_same_thread=False)
+        conn = sqlite3.connect(str(self.db_path), timeout=20.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA busy_timeout=20000")
         conn.executescript(SCHEMA)
         for ddl in (
             "ALTER TABLE loans ADD COLUMN status TEXT NOT NULL DEFAULT ''",
@@ -221,12 +221,12 @@ class Store:
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
-                pass
+                pass  # cleanup: best-effort
         try:
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idem "
                          "ON events(idem) WHERE idem != ''")
         except sqlite3.OperationalError:
-            pass
+            pass  # cleanup: best-effort
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         if version < SCHEMA_VERSION:
             conn.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
@@ -244,11 +244,11 @@ class Store:
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         except Exception:
-            pass
+            pass  # cleanup: best-effort
         try:
             conn.close()
         except Exception:
-            pass
+            pass  # cleanup: best-effort
 
     # ---------------- 基础写读 ----------------
     def _write(self, sql: str, params=()) -> int:

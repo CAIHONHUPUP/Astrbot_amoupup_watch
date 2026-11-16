@@ -139,8 +139,10 @@ class Trading:
             return {"ok": False, "message": "钱包未就绪"}
         if not self._cap_ok(wallet, amount):
             return {"ok": False, "message": "投资不能超过存款的 50%"}
+        if int(wallet.balance()) < amount + fee:
+            return {"ok": False, "message": "余额不足，无法支付交易费用"}
         if not wallet.debit(amount + fee, "买入 %s" % code, idem):
-            return {"ok": False, "message": "余额不足，买不起"}
+            return {"ok": False, "message": "余额不足，无法支付交易费用"}
         pos = self.repo.position("stock", code) or {"qty": 0, "cost_cents": 0, "available": 0}
         total_qty = float(pos["qty"]) + qty
         avg_cost = int(round((float(pos["cost_cents"]) * float(pos["qty"]) + amount + fee) / total_qty))
@@ -216,8 +218,10 @@ class Trading:
         idem = str(idem or ("fund_buy:%s:%s" % (code, self._now().strftime("%Y%m%d%H%M%S"))))
         if not self._cap_ok(wallet, amount):
             return {"ok": False, "message": "投资不能超过存款的 50%"}
+        if int(wallet.balance()) < amount:
+            return {"ok": False, "message": "余额不足，无法支付申购费用"}
         if not wallet.debit(amount, "申购基金 %s" % code, idem):
-            return {"ok": False, "message": "余额不足"}
+            return {"ok": False, "message": "余额不足，无法支付申购费用"}
         pos = self.repo.position("fund", code) or {"qty": 0, "cost_cents": 0, "available": 0}
         total = float(pos["qty"]) + shares
         avg = int(round((float(pos["cost_cents"]) * float(pos["qty"]) + amount) / total))

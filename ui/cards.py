@@ -35,9 +35,64 @@ class CardMixin:
         positions, market_value, total_pnl, trades = self._snapshot_holdings()
         loans, debt, monthly, rate, mood, decision, help_state = self._snapshot_loans()
         life, market = self._snapshot_life()
+        try:
+            market["positions"] = len(positions)
+            if positions:
+                market["note"] = ("今日已检查 %s/%s 次；当前持仓 %d 只，行情按持仓刷新。"
+                                   % (market.get("checks", 0), market.get("limit", 3), len(positions)))
+            else:
+                market["note"] = ("今日已检查 %s/%s 次；当前空仓，只记录行情检查，不展示个股行情。"
+                                   % (market.get("checks", 0), market.get("limit", 3)))
+        except Exception:
+            market["note"] = ""
+        try:
+            today = _dt.date.today().isoformat()
+            stocks = []
+            if self.finance_repo is not None:
+                for row in self.finance_repo.market_quotes(today):
+                    price = int(row.get("price_cents") or 0)
+                    prev = int(row.get("prev_cents") or price)
+                    stocks.append({"kind": "股票", "code": str(row.get("code") or ""),
+                                   "name": str(row.get("name") or row.get("code") or ""),
+                                   "price": price / 100.0,
+                                   "change_pct": ((price / prev - 1.0) * 100.0) if prev else 0.0})
+            funds = []
+            raw = self.finance_repo.meta_get("fund_quotes", "{}") if self.finance_repo else "{}"
+            try:
+                import json as _json
+                data = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except Exception:
+                data = {}
+            for code, row in (data or {}).items():
+                funds.append({"kind": "基金", "code": str(code),
+                              "name": str(row.get("name") or code),
+                              "price": float(row.get("nav") or 0),
+                              "change_pct": float(row.get("change_pct") or 0)})
+            market["stocks"] = stocks
+            market["funds"] = funds
+        except Exception as exc:
+            isolated("finance.snapshot.market_detail", exc)
+            market["stocks"] = []
+            market["funds"] = []
         prop, assets_value = self._snapshot_property(life)
         self._snapshot_salary(life)
         self._snapshot_expense(life)
+        flow = []
+        try:
+            for row in (self.finance.ledger(50) if self.finance is not None else []):
+                delta = int(row.get("delta_cents") or 0)
+                if not delta:
+                    continue
+                flow.append({
+                    "day": time.strftime("%m-%d %H:%M", time.localtime(float(row.get("ts") or 0))),
+                    "kind": "收入" if delta > 0 else "支出",
+                    "target": str(row.get("reason") or "流水"),
+                    "amount": delta / 100.0, "fee": 0,
+                    "note": str(row.get("account") or ""),
+                })
+        except Exception as exc:
+            isolated("finance.snapshot.flow", exc)
+            flow = []
         return {
             "mode": "real",
             "wallet": {"total": (cash + market_value + assets_value - debt) / 100.0,
@@ -49,6 +104,7 @@ class CardMixin:
                        "today_pct": (total_pnl / max(1, market_value - total_pnl) * 100.0)},
             "positions": positions,
             "trades": trades,
+            "flow": flow[:20],
             "life": life,
             "mood": {"score": mood.get("score"), "dominant": mood.get("dominant"),
                      "last_event": ""},
@@ -296,7 +352,7 @@ class CardMixin:
         return {
             "mode": "real",
             "wallet": {"total": 0, "available": 0, "market_value": 0, "today_pnl": 0, "today_pct": 0},
-            "positions": [], "trades": [],
+            "positions": [], "trades": [], "flow": [],
             "life": {"salary": 6800, "salary_day": 15, "next_salary": "", "rent": 0,
                      "rent_day": 1, "utilities": 0, "month_expense": 0},
             "mood": {"score": None, "dominant": "", "last_event": ""},

@@ -6,6 +6,9 @@
 """
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import datetime as _dt
 import hashlib
 import time
@@ -168,14 +171,14 @@ class FinanceLife:
                     await amo.hunger_help(text)
                 elif amo is not None and hasattr(amo, "request_hunger_help"):
                     amo.request_hunger_help()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
             try:
                 finance.nudge_mood({"委屈": 25, "郁闷": 20, "焦虑": 15},  # type: ignore[union-attr]
                                    "hunger:help:%s" % time.strftime("%Y%m%d"))
                 finance.small_diary("肚子好饿，翻遍了房间只有一包过期的饼干……")  # type: ignore[union-attr]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
             return {"help": True}
         sick = bool(state.get("sick"))
         mood = finance.mood() or {}  # type: ignore[union-attr]
@@ -193,8 +196,8 @@ class FinanceLife:
         try:
             factor = float(factor_of(current_city(self.plugin)) or 1.0)
             amount = max(500, int(round(amount * factor)))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         if cash < amount and self.plugin is not None:
             try:
                 bank = getattr(self.plugin, "bank", None)
@@ -208,8 +211,8 @@ class FinanceLife:
                 need = amount - cash
                 if int(bank.current_cents()) >= need:
                     await bank.withdraw(need, 0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         idem = "hunger:%s:%s" % (time.strftime("%Y%m%d%H"), food)
         res = await finance.expense(amount, "吃的：%s" % food, idem, necessary=True)  # type: ignore[union-attr]
         if not isinstance(res, dict) or not res.get("ok"):
@@ -220,8 +223,8 @@ class FinanceLife:
                 amo.mark_meal(food, 4, mood_word)
             if self.repo is not None:
                 self.repo.meta_set("last_meal_at", time.time())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         try:
             finance.nudge_mood(deltas, idem + ":mood")  # type: ignore[union-attr]
             if sick:
@@ -234,8 +237,8 @@ class FinanceLife:
             hour = int(getattr(now, "hour", 12))
             if hour >= 23 or hour < 5:
                 await finance.permanent_memory("半夜饿得不行，吃了%s。" % food, idem + ":mem")  # type: ignore[union-attr]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         return {"food": food, "amount": amount, "gain": gain, "mood": mood_word}
 
     # ---------- 结算 ----------
@@ -244,8 +247,8 @@ class FinanceLife:
         self.ensure_seed()
         try:
             await self._check_hunger(now)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         self._roll_half(now)
         period = now.strftime("%Y-%m")
         steps = {}
@@ -350,8 +353,8 @@ class FinanceLife:
                 try:
                     await self.finance.remember_event("欠费", amount, "%s 扣款失败，先欠着，%s" % (
                         name, (await self.finance.memory.context(limit=1)) or ""), "arrears:%s:%s" % (key, period))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WATCH] optional step failed: %r", exc)
                 return "fail"
             self.repo.mark_settled(period, key, str(amount))
         return "ok"

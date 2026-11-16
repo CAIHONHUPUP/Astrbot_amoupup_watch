@@ -19,6 +19,7 @@ SYSTEM = (
     "不要编造行情，不要假设用户替她下单。"
     "允许小赚就卖、大赚才卖、亏了死扛、亏了割肉、空仓观望、追高、抄底，风格不必固定。"
     "你还可以决定把闲钱存银行：活期灵活、定期利息高。"
+    "你也可以申购/赎回场外基金，或者今天行情太差就不买。"
     "倾向：可用余额连续几天超过 10000 且近期不打算重仓，就存定期赚利息；"
     "最近在观望股市、准备随时加仓，就留活期；"
     "总资产不足 10000 或刚经历破产危机，存活期，或只存 500 元 3 个月定期当心理安慰。"
@@ -32,13 +33,15 @@ PROMPT = """现在：{now}
 利率：活期年化 0.2%；定期 3 个月 1.3% / 6 个月 1.5% / 12 个月 1.7% / 36 个月 2.3%
 持仓：{positions}
 候选行情：{quotes}
+基金事实：{funds}
 情绪：{mood}
 投资上限：不超过存款 50%（存款=现金+持仓市值）
 规则：A 股买入 100 股整数倍；不能透支；买入价不能超过涨停。
 
 请给出这一次的决定，JSON 格式（三选一）：
 买卖/观望：{{"action":"buy|sell|hold","code":"","qty":0,"reason":"一句中文理由"}}
-存钱：{{"action":"deposit","account_type":"current|fixed","term_months":0,"amount":0,"reason":"一句中文理由"}}"""
+存钱：{{"action":"deposit","account_type":"current|fixed","term_months":0,"amount":0,"reason":"一句中文理由"}}
+基金：{{"action":"buy_fund|sell_fund","code":"","amount":0,"shares":0,"reason":"一句中文理由"}}"""
 
 
 async def _provider(plugin):
@@ -87,6 +90,22 @@ def parse_decision(text, allowed_codes):
             term = 0
         return {"action": "deposit", "account_type": kind, "term_months": term,
                 "amount_cents": amount_cents, "code": "", "qty": 0, "reason": reason}
+    if action in ("buy_fund", "sell_fund"):
+        code = str(data.get("code") or "").strip()
+        if code not in allowed_codes:
+            return None
+        try:
+            amount = float(data.get("amount") or 0)
+            shares = float(data.get("shares") or 0)
+        except (TypeError, ValueError):
+            return None
+        if action == "buy_fund" and amount <= 0:
+            return None
+        if action == "sell_fund" and shares <= 0:
+            return None
+        return {"action": action, "code": code, "qty": 0, "shares": shares,
+                "amount_cents": int(round(amount * 100)),
+                "reason": str(data.get("reason") or "").strip()[:60] or "她看了看基金"}
     if action not in ("buy", "sell", "hold"):
         return None
     code = str(data.get("code") or "").strip()
@@ -102,7 +121,7 @@ def parse_decision(text, allowed_codes):
     return {"action": action, "code": code, "qty": qty, "reason": reason}
 
 
-async def llm_decide(plugin, cash_cents, positions, quotes, mood_word, allowed_codes=None, news_text="", memory_text=""):
+async def llm_decide(plugin, cash_cents, positions, quotes, mood_word, allowed_codes=None, news_text="", memory_text="", fund_text=""):
     provider = await _provider(plugin)
     if provider is None:
         return None
@@ -124,6 +143,7 @@ async def llm_decide(plugin, cash_cents, positions, quotes, mood_word, allowed_c
         current="%.2f" % (current_cents / 100.0),
         fixed="%.2f" % (fixed_cents / 100.0),
         positions=pos_text, quotes=quote_text, mood=mood_word or "平静",
+        funds=fund_text or "今天没有基金事实",
         )
     if news_text:
         prompt += "\n新闻（参考，可忽略，可写进理由）：\n" + str(news_text)[:1200]

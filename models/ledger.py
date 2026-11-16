@@ -187,6 +187,9 @@ class FinanceRepo:
         rows = self._rows("SELECT * FROM market_cache WHERE day=? AND code=?", (str(day), str(code)))
         return rows[0] if rows else None
 
+    def market_quotes(self, day):
+        return self._rows("SELECT * FROM market_cache WHERE day=? ORDER BY code", (str(day),))
+
     # ---------- 元数据 ----------
     def meta_get(self, key, default=None):
         rows = self._rows("SELECT v FROM meta WHERE k=?", (str(key),))

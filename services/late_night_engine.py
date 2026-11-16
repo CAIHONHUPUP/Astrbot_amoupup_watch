@@ -2,6 +2,9 @@
 """熬夜的财务/职场后果：夜宵冲动、迟到罚款、转账哄睡清空惩罚。"""
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import datetime as _dt
 
 try:
@@ -54,16 +57,16 @@ async def tick(plugin, now=None):
                     try:
                         amo.add_hunger("amo", 15)
                         amo.note_late_snack(amount, food)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("[WATCH] optional step failed: %r", exc)
                     try:
                         finance.small_diary("今天熬夜看盘，肚子饿得咕咕叫，没忍住点了份%s，花了%d块，呜呜。" % (food, amount // 100))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("[WATCH] optional step failed: %r", exc)
                 try:
                     repo.meta_set(key, "1")  # type: ignore[union-attr]
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WATCH] optional step failed: %r", exc)
                 out["snack"] = amount
     # 第二天迟到：工作日、熬夜未哄睡、60% 概率
     if state.get("late_yesterday") and not state.get("cleared") and now.weekday() < 5:
@@ -82,13 +85,13 @@ async def tick(plugin, now=None):
                     try:
                         amo.note_late_fine(fine)
                         finance.small_diary("今天起晚了，上班迟到扣了%d块，好心疼。" % (fine // 100))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("[WATCH] optional step failed: %r", exc)
                     out["fine"] = fine
             try:
                 repo.meta_set("late_fine:" + now.date().isoformat(), "1")  # type: ignore[union-attr]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
     return out
 
 
@@ -116,6 +119,6 @@ async def maybe_soothe(plugin, text):
         if finance is not None:
             finance.nudge_mood({"开心": 20, "感动": 20}, "late:soothe:%s" % cents)
             finance.small_diary("熬夜的时候老公转账让我买夜宵，心里暖暖的。")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
     return {"ok": True, "message": "谢谢老公，我吃完就睡~"}

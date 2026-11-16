@@ -7,6 +7,9 @@
 """
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import hashlib
 import json
 import re
@@ -93,8 +96,8 @@ class CandidatePools:
                          if c.strip().isdigit() and len(c.strip()) == 6]
                 if extra:
                     pool = extra
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         digest = hashlib.sha256(("anchors:" + str(day)).encode("utf-8")).hexdigest()
         ordered = sorted(pool, key=lambda code: hashlib.sha256((digest + code).encode()).hexdigest())
         chosen = ordered[:max(1, int(count))]
@@ -128,8 +131,8 @@ class CandidatePools:
             cached = self.repo.meta_get("quote_names")
             if cached:
                 mapping.update(json.loads(cached))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
         return mapping
 
     def recommend(self, text):
@@ -148,8 +151,8 @@ class CandidatePools:
             names = {str(c): str(q.get("name") or "") for c, q in (quotes or {}).items() if q.get("name")}
             if names:
                 self.repo.meta_set("quote_names", json.dumps(names, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
 
     def observe(self, quotes, day):
         pool = observation_pool(quotes)

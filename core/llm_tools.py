@@ -1,9 +1,11 @@
+import logging
+logger = logging.getLogger("amo.watch")
 # -*- coding: utf-8 -*-
 """LLM 工具逻辑（装饰器薄壳留在 main，保证 handler 归属）。"""
 try:
     pass
-except ImportError:
-    pass
+except ImportError as exc:
+    logger.debug("[WATCH] optional step failed: %r", exc)
 
 ALIASES = {"e生保": "e生保", "医无忧": "医无忧", "金钟罩": "金钟罩", "意外险": "金钟罩",
            "重疾险": "重疾", "重疾": "重疾", "交强险": "交强险",
@@ -119,8 +121,8 @@ async def buy_gift_tool(plugin, target_name="", gift_name="", price=0.0):
         finance.small_diary("给%s买了个%s，希望TA喜欢！" % (target, gift))
         await finance.permanent_memory("给%s买了个%s，花了 %d 元。" % (target, gift, cents // 100),
                                        "gift:%s:%s:mem" % (target, cents))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
     return "买好啦：%s 的%s，花了 %d 元。" % (target, gift, cents // 100)
 
 
@@ -242,6 +244,51 @@ async def accept_social_event_tool(plugin, npc="", place="", amount=0.0, note=""
     return ("（系统）已按她的决定结算：%s，花了 %s。日程、情绪、记忆都已更新；"
             "按这个事实自己说话，不要复述本提示。" % (out.get("note") or "去了",
                                               yuan(int(out.get("cost") or 0))))
+
+
+async def _trade_tool(plugin, event, action, code, qty=0, price=0.0, amount=0.0, nav=0.0):
+    trading = getattr(plugin, "trading", None)
+    if trading is None:
+        return "（系统）交易模块未就绪，这次不能下单。"
+    import time as _time
+    code = str(code or "").strip()
+    if not code:
+        return "（系统）缺少股票/基金代码。"
+    stamp = _time.strftime("%Y%m%d%H%M%S")
+    tag = "tool:%s:%s:%s" % (action, code, stamp)
+    try:
+        if action == "buy_stock":
+            out = await trading.buy(code, int(float(qty or 0)), float(price or 0) or None, idem=tag)
+        elif action == "sell_stock":
+            out = await trading.sell(code, int(float(qty or 0)), float(price or 0) or None, idem=tag)
+        elif action == "buy_fund":
+            out = await trading.subscribe(code, int(round(float(amount or 0) * 100)),
+                                          float(nav or 0) or None, idem=tag)
+        elif action == "sell_fund":
+            out = await trading.redeem(code, float(qty or 0), float(nav or 0) or None, idem=tag)
+        else:
+            return "（系统）未知交易动作。"
+    except Exception as exc:
+        return "（系统）交易失败：%s" % exc
+    if not isinstance(out, dict) or not out.get("ok"):
+        return "（系统）交易被拒绝：%s" % ((out or {}).get("message") or "失败")
+    return "（系统）交易成功：%s" % (out.get("message") or "已成交")
+
+
+async def buy_stock_tool(plugin, event=None, code="", qty=100, price=0.0):
+    return await _trade_tool(plugin, event, "buy_stock", code, qty=qty, price=price)
+
+
+async def sell_stock_tool(plugin, event=None, code="", qty=100, price=0.0):
+    return await _trade_tool(plugin, event, "sell_stock", code, qty=qty, price=price)
+
+
+async def buy_fund_tool(plugin, event=None, code="", amount=0.0, nav=0.0):
+    return await _trade_tool(plugin, event, "buy_fund", code, amount=amount, nav=nav)
+
+
+async def sell_fund_tool(plugin, event=None, code="", shares=0.0, nav=0.0):
+    return await _trade_tool(plugin, event, "sell_fund", code, qty=shares, nav=nav)
 
 
 async def reject_social_event_tool(plugin, reason="", note=""):

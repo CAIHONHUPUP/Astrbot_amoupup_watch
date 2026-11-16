@@ -14,6 +14,9 @@
 """
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import datetime as _dt
 import hashlib
 
@@ -128,8 +131,8 @@ class FinanceProperty:
                 stored = int(raw)
                 if low <= stored <= high:
                     return stored
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         if kind == "house":
             value = base_house_price(city)
             value = self._cfg_int("finance_house_price_cents", value)
@@ -146,8 +149,8 @@ class FinanceProperty:
         if raw:
             try:
                 return float(raw)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         low, high = HOUSE_RATE_RANGE if kind == "house" else CAR_RATE_RANGE
         value = round(low + (high - low) * (_hash_int("rate:" + kind, 0, 1000) / 1000.0), 4)
         self.repo.meta_set(key, value)

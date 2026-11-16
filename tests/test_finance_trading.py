@@ -87,8 +87,9 @@ def test_buy_rejects_non_lot(env, monkeypatch):
     assert asyncio.run(trading.buy("600519", 150, price=100.0))["ok"] is False
 
 
-def test_buy_rejects_outside_session(env):
+def test_buy_rejects_outside_session(env, monkeypatch):
     trading, _, _, _ = env
+    monkeypatch.setattr(ft, "in_session", lambda now: False)
     res = asyncio.run(trading.buy("600519", 100, price=100.0))
     assert res["ok"] is False and "交易时段" in res["message"]
 

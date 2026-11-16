@@ -2,6 +2,9 @@
 """人情礼节：NPC 生日、父母礼物、份子钱、转账尽孝。"""
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger("amo.watch")
+
 import datetime as _dt
 import json
 import re
@@ -32,8 +35,8 @@ def _birthdays(plugin):
                for i, name in enumerate(_PEOPLE)}
         try:
             repo.meta_set("npc_birthdays", json.dumps(raw, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
     return raw
 
 
@@ -103,8 +106,8 @@ async def tick(plugin, now=None):
                 amo.note_gift_event(
                     "%s的生日还有%d天，可用余额 %.2f 元；可以调用 buy_gift 给她挑礼物。"
                     % (name, delta, cash_now / 100.0), now.timestamp() + 3 * 86400)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
         if delta > 0:
             out.setdefault("warn", []).append(name)
             continue
@@ -114,12 +117,12 @@ async def tick(plugin, now=None):
                 try:
                     amo.note_gift_event("妈妈生日快到了，你连买蛋糕的钱都没有，很内疚。",
                                         now.timestamp() + 2 * 86400)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WATCH] optional step failed: %r", exc)
             try:
                 finance.small_diary("好穷，只能给%s买个小蛋糕，觉得自己好没用……" % name)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
             out.setdefault("broke", []).append(name)
             continue
         if name in PARENTS and cash > 80000:
@@ -137,19 +140,19 @@ async def tick(plugin, now=None):
                 finance.small_diary("给%s买了个%s，%s一定很高兴！" % (name, gift, name))
                 await finance.permanent_memory("给%s买了个%s。" % (name, gift),
                                                "gift:%s:%s:mem" % (name, year))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
             if amo is not None:
                 try:
                     amo.note_gift_event("%s收到礼物很开心，还问起你了，说下次带你回家吃饭！" % name,
                                         now.timestamp() + 86400)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WATCH] optional step failed: %r", exc)
             out.setdefault("gift", []).append((name, gift, cost))
         try:
             repo.meta_set(_done_key(name, year), "1")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
     # 每月 8 号红色炸弹
     if now.day == 8:
         try:
@@ -165,13 +168,13 @@ async def tick(plugin, now=None):
             if isinstance(res, dict) and res.get("ok"):
                 try:
                     finance.small_diary("这个月又收到一张红色炸弹，随了 300 块份子钱，肉疼。")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[WATCH] optional step failed: %r", exc)
                 out["redbomb"] = 30000
             try:
                 repo.meta_set("redbomb:%s-%s" % (now.year, now.month), "1")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
     return out
 
 
@@ -192,6 +195,6 @@ async def maybe_transfer(plugin, text):
         finance.nudge_mood({"开心": 30, "感动": 30}, "gift:transfer:%s" % cents)
         await finance.permanent_memory("妈妈生日，老公给了我 %d 块让我去尽孝心，他真好。" % (cents // 100),
                                        "gift:transfer:%s:mem" % cents)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
     return {"ok": True, "message": "谢谢老公，我这就去给妈妈挑礼物！"}

@@ -2,6 +2,8 @@
 """社交引擎测试用的最小假仓库 / 假财务（只实现被调用到的接口）。"""
 from __future__ import annotations
 
+import time
+
 
 class FakeRepo:
     def __init__(self):
@@ -87,7 +89,7 @@ class FakeRepo:
         if idem and self.event_exists(idem):
             return False
         self.log.append({"id": len(self.log) + 1, "kind": kind, "day": day,
-                         "payload": payload, "weight": weight, "created_at": 0.0,
+                         "payload": payload, "weight": weight, "created_at": time.time(),
                          "idem": str(idem or "")})
         return True
 

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """银行储蓄：活期/定期、计息、提前支取惩罚、应急取现、闲钱自动存定期。"""
 from __future__ import annotations
+
+import logging
+logger = logging.getLogger("amo.watch")
 import asyncio, calendar, datetime as _dt, json, time
 
 try:
@@ -290,8 +293,8 @@ def _row_mature_ts(row):
     if ts is not None:
         try:
             return int(ts)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
     end = str(row.get("end") or "")
     if end:
         try:

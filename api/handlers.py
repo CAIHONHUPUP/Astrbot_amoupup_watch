@@ -8,8 +8,14 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
+import logging
 import os
 import time
+
+try:
+    from astrbot.api import logger
+except Exception:  # 离线测试
+    logger = logging.getLogger("amo.watch")
 
 try:
     from ..guard import isolated
@@ -51,8 +57,8 @@ class ApiMixin:
                 if query:
                     raw += " " + str(dict(query))
                 demo = "demo=1" in raw
-            except Exception:
-                pass
+            except Exception as exc:
+                isolated("web.finance.demo", exc)
             return self._finance_snapshot(demo=demo)
         except Exception as exc:
             isolated("web.finance", exc)
@@ -123,8 +129,8 @@ class ApiMixin:
                         info = birthday_info(self, str((row or {}).get("name") or ""))
                         row["birthday"] = info.get("birthday")
                         row["birthday_text"] = info.get("text")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    isolated("web.social.birthday", exc)
                 recv = social.repo.receivables()
                 return {"ok": True, "npcs": rows, "receivables": recv,
                         "line": social.relation_line(),
@@ -240,10 +246,34 @@ class ApiMixin:
         try:
             if not path or not os.path.isfile(path):
                 return ""
-            if os.path.getsize(path) > 2 * 1024 * 1024:
+            if os.path.getsize(path) > 8 * 1024 * 1024:
                 return ""
-            with open(path, "rb") as fh:
-                return "data:image/png;base64," + base64.b64encode(fh.read()).decode("ascii")
+            # 原图 1.7MB+ 直接转 data URI 会超过浏览器地址上限，表现为裂图。
+            # 统一缩到 960 内、转 JPEG，通常 100-300KB，足够面板看。
+            try:
+                from io import BytesIO
+                from PIL import Image
+                with Image.open(path) as im:
+                    im.thumbnail((960, 960))
+                    if im.mode in ("RGBA", "LA", "P"):
+                        im = im.convert("RGBA")
+                        bg = Image.new("RGB", im.size, "white")
+                        bg.paste(im, mask=im.split()[-1])
+                        im = bg
+                    else:
+                        im = im.convert("RGB")
+                    buf = BytesIO()
+                    im.save(buf, "JPEG", quality=82, optimize=True)
+                    raw = buf.getvalue()
+                if len(raw) > 2 * 1024 * 1024:
+                    return ""
+                return "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+            except Exception:
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+                if len(raw) > 2 * 1024 * 1024:
+                    return ""
+                return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
         except Exception:
             return ""
 
@@ -481,6 +511,7 @@ class ApiMixin:
             slot = str(body.get("slot") or "close")
             return await self.finance_decision.run_slot(slot)
         except Exception as exc:
+            logger.exception("[WATCH] finance decision failed")
             isolated("web.decision", exc)
             return {"ok": False, "message": "决策失败：%s" % exc}
 
