@@ -14,10 +14,12 @@ import random
 
 try:
     from ..guard import isolated
+    from ..services.fund_market import FundMarket
     from ..services.market_api import fetch_quotes
     from ..utils.helpers import is_trading_day
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
+    from services.fund_market import FundMarket
     from services.market_api import fetch_quotes
     from utils.helpers import is_trading_day
 
@@ -144,38 +146,27 @@ class FinanceDecision:
         now = now or _dt.datetime.now()
         positions, codes = self._slot_candidates(now)
         day = now.date().isoformat()
-        quotes, failure = await self._slot_quotes(codes, now, day)
-        if failure is not None:
-            return failure
         cash = self.finance.balance_cents() or 0
         fund_text = ""
         self._fund_codes = set()
+        self._fund_quotes = {}
+        fund_quotes = {}
         if slot == "close":
             try:
-                try:
-                    from ..core.fund_pool import FundPool
-                    from ..services.fund_api import fetch_fund_quotes
-                except ImportError:
-                    from core.fund_pool import FundPool
-                    from services.fund_api import fetch_fund_quotes
-                pool = FundPool(self.plugin)
-                fund_codes = pool.codes(day)
-                fund_quotes = await self.runtime.run_io(fetch_fund_quotes, fund_codes, timeout=12) or {}
-                pool.observe(fund_quotes, day)
-                try:
-                    import json as _json
-                    self.repo.meta_set("fund_quotes", _json.dumps(fund_quotes, ensure_ascii=False))
-                except Exception as exc:
-                    isolated("finance.fund.quotes_save", exc)
-                self._fund_codes = set(fund_codes)
-                lines = ["%s %s 净值%.4f 估算涨跌%+.2f%%" % (
-                    q.get("code"), q.get("name") or "", float(q.get("nav") or 0),
-                    float(q.get("change_pct") or 0)) for q in fund_quotes.values()]
-                fund_text = ("现在是14:50，距离基金交易截止还有10分钟。可用余额 %.2f 元。\n"
-                             "基金候选（可申购/加仓/赎回，也可以不买）：\n%s" %
-                             (int(cash) / 100.0, "\n".join(lines) or "今天没有拉到基金净值"))
+                market = FundMarket(self.plugin, self.runtime, self.repo)
+                await market.refresh(now)
+                fund_quotes = market.latest(day)
+                self._fund_quotes = fund_quotes
+                self._fund_codes = {str(code) for code, quote in fund_quotes.items()
+                                    if (quote or {}).get("tradeable")}
+                fund_text = market.facts(day, cash, fund_quotes)
             except Exception as exc:
                 isolated("finance.fund.facts", exc)
+            if not self._fund_codes:
+                return await self._slot_outage(now, day, cash, fund_quotes)
+        quotes, failure = await self._slot_quotes(codes, now, day)
+        if failure is not None:
+            return failure
         mood = self.finance.mood()
         try:
             gamble = getattr(self.plugin, "gamble", None)
@@ -200,6 +191,97 @@ class FinanceDecision:
             if state["low"]:
                 await self._low_fund(state, now)
         return {"decision": decision, "executed": executed}
+
+    async def _slot_outage(self, now, day, cash, fund_quotes, demo=False):
+        """估值全挂：只抛事实，让她自己决定抱怨/放弃/挪钱；不拼任何情绪模板。"""
+        try:
+            from .llm_decider import llm_decide_outage
+        except ImportError:
+            from core.llm_decider import llm_decide_outage
+        try:
+            from .fund_actions import (reallocate_funds_action, send_message_to_user_action,
+                                       skip_fund_trade_action)
+        except ImportError:
+            from core.fund_actions import (reallocate_funds_action, send_message_to_user_action,
+                                           skip_fund_trade_action)
+        names = []
+        for code, quote in sorted((fund_quotes or {}).items()):
+            quote = quote or {}
+            names.append("%s %s（最近净值 %.4f）" % (
+                code, quote.get("name") or "", float(quote.get("nav") or 0)))
+        facts = ("【突发状况】现在是14:50，你本想看看基金。但是基金软件崩溃了/断网了，"
+                 "你刷新了好几次都看不到估值。你当前余额是 %.2f 元。"
+                 % (int(cash or 0) / 100.0))
+        if names:
+            facts += "\n候选基金：" + "、".join(names[:10])
+        if demo:
+            facts += "\n（测试模式：不要真的挪钱；请用 send_message_to_user 把你的第一反应发给他。）"
+        mood = self.finance.mood()
+        memory_text = ""
+        tm = getattr(self.plugin, "finance_memory", None)
+        if tm is not None:
+            try:
+                memory_text = tm.context_text([], limit=8)
+            except Exception as exc:
+                isolated("finance.fund_outage.memory", exc)
+        try:
+            decision = await llm_decide_outage(self.plugin, facts, mood.get("word"), memory_text)
+        except Exception as exc:
+            isolated("finance.fund_outage.decide", exc)
+            decision = None
+        executed = {"ok": False, "action": "", "message": "no_action"}
+        if decision:
+            action = decision.get("action")
+            try:
+                if action == "send_message_to_user":
+                    executed = await send_message_to_user_action(self.plugin, decision.get("text"))
+                elif action == "reallocate_funds":
+                    if demo:
+                        executed = {"ok": False, "action": "reallocate_funds",
+                                    "message": "demo_no_reallocate"}
+                    else:
+                        executed = await reallocate_funds_action(
+                            self.plugin, decision.get("target"),
+                            int(decision.get("amount_cents") or 0),
+                            int(decision.get("term_months") or 0), decision.get("note"))
+                elif action == "skip_fund_trade":
+                    executed = await skip_fund_trade_action(self.plugin, decision.get("reason"))
+            except Exception as exc:
+                isolated("finance.fund_outage.action", exc)
+                executed = {"ok": False, "action": action, "message": "action_failed"}
+        fact = {
+            "day": day, "time": now.strftime("%H:%M"), "reason": "fund_quote_unavailable",
+            "balance_cents": int(cash or 0), "fund_count": len(fund_quotes or {}),
+            "facts": facts,
+            "action": (decision or {}).get("action", ""),
+            "target": (decision or {}).get("target", ""),
+            "amount_cents": int((decision or {}).get("amount_cents") or 0),
+            "note": ((decision or {}).get("note") or (decision or {}).get("text")
+                     or (decision or {}).get("reason") or ""),
+            "executed": bool(executed.get("ok")),
+        }
+        try:
+            outage_idem = "decision:%s:close:outage:%s" % (day, fact["action"] or "none")
+            await self.finance.record_fund_outage(fact, idem=outage_idem)
+        except Exception as exc:
+            isolated("finance.fund_outage.record", exc)
+        try:
+            self.repo.meta_set("last_decision", json.dumps({
+                "slot": "close", "action": "fund_outage", "code": "",
+                "reason": fact["note"] or "fund_quote_unavailable",
+                "at": now.strftime("%m-%d %H:%M"), "executed": bool(executed.get("ok")),
+                "outage_action": fact["action"],
+            }, ensure_ascii=False))
+        except Exception as exc:
+            isolated("finance.fund_outage.meta", exc)
+        return {"skipped": "fund_outage", "facts": facts,
+                "decision": decision, "executed": executed}
+
+    async def simulate_fund_outage(self, now=None):
+        """调试用：模拟估值全挂，demo 模式不真的挪钱，只让她发消息/放弃。"""
+        now = now or _dt.datetime.now()
+        return await self._slot_outage(
+            now, now.date().isoformat(), self.finance.balance_cents() or 0, {}, demo=True)
 
     def _slot_candidates(self, now):
         """候选代码：现有持仓 + 每日锚点 + 待观察候选。"""
@@ -389,11 +471,27 @@ class FinanceDecision:
                 return {"ok": True, "message": "存了 %.2f 元%s" % (amount / 100.0, label)}
             return {"ok": False, "message": "存款没成功（%s）" % (out.get("reason") or "unknown")}
         if decision["action"] == "buy_fund" and decision.get("code"):
-            return await self.trading.subscribe(
-                decision["code"], int(decision.get("amount_cents") or 0), None, idem + ":fundbuy")
+            code = str(decision["code"])
+            quote = (getattr(self, "_fund_quotes", {}) or {}).get(code) or {}
+            if not quote.get("tradeable"):
+                return {"ok": False, "message": "今天这只基金没有可用估值，跳过交易"}
+            nav = float(quote.get("estimate") or 0)
+            name = str(quote.get("name") or "")
+            try:
+                return await self.trading.subscribe(
+                    code, int(decision.get("amount_cents") or 0), nav,
+                    idem + ":fundbuy", name=name)
+            except TypeError:  # 兼容旧测试里的假 Trading
+                return await self.trading.subscribe(
+                    code, int(decision.get("amount_cents") or 0), nav, idem + ":fundbuy")
         if decision["action"] == "sell_fund" and decision.get("code"):
+            code = str(decision["code"])
+            quote = (getattr(self, "_fund_quotes", {}) or {}).get(code) or {}
+            if not quote.get("tradeable"):
+                return {"ok": False, "message": "今天这只基金没有可用估值，跳过交易"}
+            nav = float(quote.get("estimate") or 0)
             return await self.trading.redeem(
-                decision["code"], float(decision.get("shares") or 0), None, idem + ":fundsell")
+                code, float(decision.get("shares") or 0), nav, idem + ":fundsell")
         if decision["action"] == "buy" and decision.get("code"):
             return await self.trading.buy(decision["code"], decision.get("qty", 100), None, idem + ":buy")
         if decision["action"] == "sell" and decision.get("code") and decision.get("qty"):
@@ -403,9 +501,16 @@ class FinanceDecision:
     async def _record(self, slot, decision, executed, now):
         mood = self.finance.mood()
         when = now.strftime("%Y-%m-%d %H:%M")
-        line = "%s 决策：%s" % (when, decision["reason"])
-        if executed.get("ok"):
-            line += "；%s" % executed.get("message", "")
+        if decision.get("action") in ("buy_fund", "sell_fund"):
+            line = json.dumps({"at": when, "action": decision.get("action"),
+                               "code": decision.get("code"),
+                               "reason": decision.get("reason"),
+                               "executed": bool(executed.get("ok"))},
+                              ensure_ascii=False)
+        else:
+            line = "%s 决策：%s" % (when, decision["reason"])
+            if executed.get("ok"):
+                line += "；%s" % executed.get("message", "")
         try:
             self.repo.meta_set("last_decision", json.dumps({
                 "slot": slot, "action": decision.get("action"), "code": decision.get("code"),
@@ -416,14 +521,17 @@ class FinanceDecision:
             isolated("finance.decision.meta", exc)
         await self.finance.memory.remember(line, kind="finance_decision",
                                            idem="decision:%s:%s:mem" % (now.date().isoformat(), slot))
+        if decision.get("action") in ("buy_fund", "sell_fund"):
+            # 基金日记由 FinanceLink.record_fund_fact 交给 LLM 生成；这里绝不拼模板
+            return
         try:
             amo = self.finance._amo()
             if amo is not None:
                 extra = ""
                 if getattr(self, "_news_used", False):
                     extra = "看了新闻，" + ("参考着做了决定。" if executed.get("ok") else "没太看懂，没动。")
-                amo.db.save_diary(now.date().isoformat(), "%02d" % now.hour,
-                                  "今天%s，%s。%s" % (decision["reason"], mood["word"], extra))
+                text = "今天%s，%s。%s" % (decision["reason"], mood["word"], extra)
+                amo.db.save_diary(now.date().isoformat(), "%02d" % now.hour, text)
         except Exception as exc:
             isolated("finance.decision.diary", exc)
 

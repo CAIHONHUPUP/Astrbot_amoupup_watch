@@ -64,6 +64,49 @@ class ApiMixin:
             isolated("web.finance", exc)
             return {"status": "error", "message": "finance failed"}
 
+    async def _api_funds(self, request=None):
+        """GET 基金候选池当日行情：名称/昨日净值/今日估值/涨跌幅/来源。"""
+        try:
+            repo = getattr(self, "finance_repo", None)
+            if repo is None:
+                return {"ok": False, "message": "账本还没准备好"}
+            day = _dt.date.today().isoformat()
+            rows = repo.fund_quotes(day)
+            items = [{
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "nav": int(row.get("dwjz_e4") or 0) / 10000.0,
+                "estimate": int(row.get("gsz_e4") or 0) / 10000.0,
+                "change_pct": int(row.get("gszzl_bp") or 0) / 100.0,
+                "source": row.get("source"),
+                "tradeable": bool(row.get("tradeable")),
+                "time": row.get("gztime"),
+                "ts": row.get("ts"),
+            } for row in rows]
+            return {"ok": True, "day": day, "items": items,
+                    "refreshed": repo.meta_get("fund_refresh:" + day, "")}
+        except Exception as exc:
+            isolated("web.funds", exc)
+            return {"ok": False, "message": "基金行情暂时读不到，稍后再看"}
+
+    async def _api_funds_refresh(self, request=None):
+        """POST 手动刷新（不受 14:50 时间限制，但仍只在交易日抓取，不交易）。"""
+        try:
+            repo = getattr(self, "finance_repo", None)
+            runtime = getattr(self, "runtime", None)
+            if repo is None or runtime is None:
+                return {"ok": False, "message": "账本还没准备好"}
+            try:
+                from ..services.fund_market import FundMarket
+            except ImportError:
+                from services.fund_market import FundMarket
+            market = getattr(self, "fund_market", None) or FundMarket(self, runtime, repo)
+            self.fund_market = market
+            return await market.refresh(force=True)
+        except Exception as exc:
+            isolated("web.funds_refresh", exc)
+            return {"ok": False, "message": "刷新失败，晚点再试"}
+
     async def _read_json(self):
         try:
             from astrbot.api.web import request as web_request
@@ -530,6 +573,9 @@ class ApiMixin:
                 return await self.finance_expense.spend(category, label, amount)
             if action == "quotes" and self.finance_decision is not None:
                 result = await self.finance_decision.run_slot("close")
+                return {"ok": True, "result": result}
+            if action == "fund_outage" and self.finance_decision is not None:
+                result = await self.finance_decision.simulate_fund_outage()
                 return {"ok": True, "result": result}
             return {"ok": False, "message": "未知调试动作"}
         except Exception as exc:

@@ -259,6 +259,40 @@ class ToolWrappersMixin:
                 from core.llm_tools import sell_fund_tool
             return await sell_fund_tool(self, event, code, shares, nav)
 
+        @_optional_hook("llm_tool")("send_message_to_user")
+        async def send_message_to_user(self, event, text: str = ""):
+            """主动给老公发一条消息：text 是你此刻想说的话，不是系统提示。"""
+            try:
+                from .core.fund_actions import send_message_to_user_action
+            except ImportError:
+                from core.fund_actions import send_message_to_user_action
+            out = await send_message_to_user_action(self, text)
+            return "（系统）已发送。" if out.get("ok") else "（系统）没发出去：%s" % out.get("message")
+
+        @_optional_hook("llm_tool")("skip_fund_trade")
+        async def skip_fund_trade(self, event, reason: str = ""):
+            """主动放弃今天的基金交易：reason 是你自己的理由。"""
+            try:
+                from .core.fund_actions import skip_fund_trade_action
+            except ImportError:
+                from core.fund_actions import skip_fund_trade_action
+            await skip_fund_trade_action(self, reason)
+            return "（系统）已跳过基金交易。"
+
+        @_optional_hook("llm_tool")("reallocate_funds")
+        async def reallocate_funds(self, event, target: str = "keep", amount: float = 0.0,
+                                   term_months: int = 0, note: str = ""):
+            """把钱挪作他用：target=deposit_fixed/deposit_current/shopping/keep；amount 是元。"""
+            try:
+                from .core.fund_actions import reallocate_funds_action
+            except ImportError:
+                from core.fund_actions import reallocate_funds_action
+            out = await reallocate_funds_action(
+                self, target, int(round(float(amount or 0) * 100)), int(term_months or 0), note)
+            if out.get("ok"):
+                return "（系统）已执行：%s" % out.get("message")
+            return "（系统）没执行：%s" % out.get("message")
+
 
 @_optional_hook("llm_tool")("modify_date")
 async def modify_date_tool(self, event, activity: str = "", time: str = ""):

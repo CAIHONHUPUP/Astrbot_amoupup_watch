@@ -190,6 +190,56 @@ class FinanceRepo:
     def market_quotes(self, day):
         return self._rows("SELECT * FROM market_cache WHERE day=? ORDER BY code", (str(day),))
 
+    # ---------- 基金行情（每日 14:50） ----------
+    def save_fund_quotes(self, day, quotes):
+        """批量写当天基金行情：净值按 0.0001 元、涨跌幅按 0.01% 存整数，避免浮点误差。"""
+        count = 0
+        for code, quote in (quotes or {}).items():
+            quote = quote or {}
+            try:
+                dwjz = int(round(float(quote.get("dwjz") or quote.get("nav") or 0) * 10000))
+                gsz = int(round(float(quote.get("gsz") or quote.get("estimate") or 0) * 10000))
+                change = int(round(float(quote.get("change_pct") or 0) * 100))
+            except (TypeError, ValueError):
+                continue
+            if not str(code).strip():
+                continue
+            self.store.write(
+                "INSERT INTO fund_quotes(day, code, name, dwjz_e4, gsz_e4, gszzl_bp, source, tradeable, gztime, ts) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(day, code) DO UPDATE SET "
+                "name=excluded.name, dwjz_e4=excluded.dwjz_e4, gsz_e4=excluded.gsz_e4, "
+                "gszzl_bp=excluded.gszzl_bp, source=excluded.source, tradeable=excluded.tradeable, "
+                "gztime=excluded.gztime, ts=excluded.ts",
+                (str(day), str(code), str(quote.get("name") or ""), dwjz, gsz, change,
+                 str(quote.get("source") or ""), 1 if quote.get("tradeable") else 0,
+                 str(quote.get("time") or ""), time.time()))
+            count += 1
+        return count
+
+    def fund_quotes(self, day):
+        return self._rows("SELECT * FROM fund_quotes WHERE day=? ORDER BY code", (str(day),))
+
+    def fund_quote(self, day, code):
+        rows = self._rows("SELECT * FROM fund_quotes WHERE day=? AND code=?", (str(day), str(code)))
+        return rows[0] if rows else None
+
+    # ---------- 基金交易事实（只存结构化数据，不拼句子） ----------
+    def add_fund_trade_fact(self, idem, action, code, name, amount_cents, shares=0.0,
+                            nav=0.0, fee_cents=0, pnl_cents=0, day="", ts=None):
+        return self.store.write(
+            "INSERT OR REPLACE INTO fund_trade_facts(idem, day, action, code, name, "
+            "amount_cents, shares, nav_e4, fee_cents, pnl_cents, ts) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (str(idem), str(day or time.strftime("%Y-%m-%d")), str(action), str(code),
+             str(name or ""), int(amount_cents or 0), float(shares or 0),
+             int(round(float(nav or 0) * 10000)), int(fee_cents or 0),
+             int(pnl_cents or 0), float(ts or time.time())))
+
+    def fund_trade_facts(self, day=""):
+        if day:
+            return self._rows("SELECT * FROM fund_trade_facts WHERE day=? ORDER BY ts, idem", (str(day),))
+        return self._rows("SELECT * FROM fund_trade_facts ORDER BY ts DESC, idem")
+
     # ---------- 元数据 ----------
     def meta_get(self, key, default=None):
         rows = self._rows("SELECT v FROM meta WHERE k=?", (str(key),))

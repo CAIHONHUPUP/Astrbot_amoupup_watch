@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 logger = logging.getLogger("amo.watch")
-import asyncio, calendar, datetime as _dt, json, time
+import asyncio, calendar, datetime as _dt, inspect, json, time
 
 try:
     from ..utils.helpers import stable_int, yuan
@@ -45,7 +45,7 @@ class BankEngine:
     def total_cents(self):
         return self.current_cents() + self.fixed_cents()
 
-    async def deposit(self, amount_cents, term_months=0, now=None):
+    async def deposit(self, amount_cents, term_months=0, now=None, diary=True):
         amount = int(amount_cents or 0)
         if amount <= 0:
             return {"ok": False, "reason": "zero"}
@@ -53,11 +53,17 @@ class BankEngine:
         # 幂等键带上「分钟」：同一天存两次同样金额是两笔真实操作，
         # 以前整天共用一个键，第二次会被钱包判成重复扣款（rowcount=0）→ 报「余额不足」，
         # 钱没进银行；带分钟后只有同一分钟内的重试才会被拦。
+        expense_kwargs = {"necessary": True}
+        try:
+            if "diary" in inspect.signature(self.finance.expense).parameters:
+                expense_kwargs["diary"] = diary
+        except (TypeError, ValueError) as exc:
+            logger.debug("[WATCH] bank expense signature check failed: %r", exc)
         res = await self.finance.expense(
             amount, "存款：%s" % ("活期" if not term_months else "定期%d个月" % int(term_months)),
             "bank:dep:%s:%s:%s:%02d%02d" % (now.date().isoformat(), amount,
                                             int(term_months or 0), now.hour, now.minute),
-            necessary=True)
+            **expense_kwargs)
         if not isinstance(res, dict) or not res.get("ok"):
             return {"ok": False, "reason": "insufficient"}
         data = self._data()
@@ -82,7 +88,8 @@ class BankEngine:
         else:
             lines = ["今天把 %s 的闲钱存了%d个月定期，希望能多点利息，开心。" % (yuan(amount), int(term_months)),
                      "存了 %s 的%d个月定期，利息比活期高，想想就高兴。" % (yuan(amount), int(term_months))]
-        self.finance.small_diary(lines[stable_int("bank-dep:" + str(amount), 0, len(lines))])
+        if diary:
+            self.finance.small_diary(lines[stable_int("bank-dep:" + str(amount), 0, len(lines))])
         return {"ok": True, "amount": amount, "term": int(term_months or 0)}
 
     async def withdraw(self, amount_cents, term_months=None, now=None):

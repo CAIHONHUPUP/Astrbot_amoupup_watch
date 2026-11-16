@@ -133,6 +133,32 @@ CREATE TABLE IF NOT EXISTS market_cache (
     ts REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (day, code)
 );
+CREATE TABLE IF NOT EXISTS fund_quotes (
+    day TEXT NOT NULL, code TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    dwjz_e4 INTEGER NOT NULL DEFAULT 0,
+    gsz_e4 INTEGER NOT NULL DEFAULT 0,
+    gszzl_bp INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    tradeable INTEGER NOT NULL DEFAULT 0,
+    gztime TEXT NOT NULL DEFAULT '',
+    ts REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, code)
+);
+CREATE TABLE IF NOT EXISTS fund_trade_facts (
+    idem TEXT PRIMARY KEY,
+    day TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    amount_cents INTEGER NOT NULL DEFAULT 0,
+    shares REAL NOT NULL DEFAULT 0,
+    nav_e4 INTEGER NOT NULL DEFAULT 0,
+    fee_cents INTEGER NOT NULL DEFAULT 0,
+    pnl_cents INTEGER NOT NULL DEFAULT 0,
+    ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fund_trade_day ON fund_trade_facts(day, ts DESC);
 CREATE TABLE IF NOT EXISTS expenses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     idem TEXT UNIQUE,

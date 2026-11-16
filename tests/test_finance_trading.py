@@ -48,6 +48,10 @@ class FakeFinance:
         self.calls.append(("record_trade", args, kwargs))
         return {"ok": True}
 
+    async def record_fund_fact(self, *args, **kwargs):
+        self.calls.append(("record_fund_fact", args, kwargs))
+        return {"ok": True}
+
     async def trade_pnl(self, *args, **kwargs):
         self.calls.append(("trade_pnl", args, kwargs))
         return {"ok": True}

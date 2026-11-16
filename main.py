@@ -107,7 +107,7 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         for _name in ("finance_repo", "trading", "finance_life", "finance_property",
                       "finance_salary", "finance_expense", "work_events", "medical",
                       "finance_help", "finance_consume", "finance_decision",
-                      "finance_daily", "finance_memory", "finance_pools"):
+                      "finance_daily", "finance_memory", "finance_pools", "fund_market"):
             setattr(self, _name, None)
         self.city_override = ""
         self._closed = asyncio.Event()

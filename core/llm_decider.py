@@ -44,6 +44,80 @@ PROMPT = """现在：{now}
 基金：{{"action":"buy_fund|sell_fund","code":"","amount":0,"shares":0,"reason":"一句中文理由"}}"""
 
 
+OUTAGE_SYSTEM = (
+    "你是她的理财决策脑。现在基金估值接口全部拿不到，你有主动权决定怎么反应。"
+    "只根据给定的突发事实、当前情绪、当前余额做决定，不要编造行情；"
+    "你可以抱怨、放弃、或者把钱挪作他用。只输出一行 JSON，不要解释，不要 markdown。"
+)
+
+OUTAGE_PROMPT = """{facts}
+当前情绪：{mood}
+可用行动（只选一个，输出一行 JSON）：
+1. 主动给他发消息：{{"action":"send_message_to_user","text":"你自己想说的话"}}
+2. 放弃今天买基金：{{"action":"skip_fund_trade","reason":"你自己的理由"}}
+3. 把钱挪作他用：{{"action":"reallocate_funds","target":"deposit_fixed|deposit_current|shopping|keep","amount":0,"term_months":0,"note":"你自己的话"}}
+amount 单位是元；定期只能选 3/6/12/36 个月；keep 表示先留着。"""
+
+
+def parse_outage_decision(text):
+    """解析故障时的自主行动；不合法返回 None。"""
+    raw = str(text or "")
+    match = re.search(r"{.*}", raw, re.S)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(0))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    action = str(data.get("action") or "").lower()
+    if action == "send_message_to_user":
+        message = str(data.get("text") or data.get("message") or "").strip()
+        if not message:
+            return None
+        return {"action": "send_message_to_user", "text": message[:200]}
+    if action == "skip_fund_trade":
+        return {"action": "skip_fund_trade",
+                "reason": str(data.get("reason") or "").strip()[:120]}
+    if action == "reallocate_funds":
+        target = str(data.get("target") or "").strip().lower()
+        if target not in ("deposit_fixed", "deposit_current", "shopping", "keep"):
+            return None
+        try:
+            amount_cents = int(round(float(data.get("amount") or 0) * 100))
+            term = int(data.get("term_months") or 0)
+        except (TypeError, ValueError):
+            return None
+        if target in ("deposit_fixed", "deposit_current", "shopping") and amount_cents <= 0:
+            return None
+        if target == "deposit_fixed" and term not in (3, 6, 12, 36):
+            return None
+        if target != "deposit_fixed":
+            term = 0
+        return {"action": "reallocate_funds", "target": target,
+                "amount_cents": amount_cents, "term_months": term,
+                "note": str(data.get("note") or "").strip()[:120]}
+    return None
+
+
+async def llm_decide_outage(plugin, facts, mood_word, memory_text=""):
+    """故障时把事实交给 LLM，由她决定抱怨/放弃/挪钱。"""
+    provider = await _provider(plugin)
+    if provider is None:
+        return None
+    prompt = OUTAGE_PROMPT.format(facts=str(facts or ""), mood=str(mood_word or "平静"))
+    if memory_text:
+        prompt += "\n相关记忆（参考，可忽略）：\n" + str(memory_text)[:1200]
+    try:
+        response = await provider.text_chat(prompt=prompt, system_prompt=OUTAGE_SYSTEM, contexts=[])
+        text = str(getattr(response, "completion_text", "") or "")
+    except Exception as exc:
+        isolated("finance.outage.llm", exc)
+        return None
+    return parse_outage_decision(text)
+
+
 async def _provider(plugin):
     try:
         context = getattr(plugin, "context", None)

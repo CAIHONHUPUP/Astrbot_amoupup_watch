@@ -6,6 +6,8 @@ BASE = "/Astrbot_amoupup_watch"
 ROUTES = [
     ("/diag", "_api_diag", ["GET"], "守护面板：运行状态"),
     ("/finance", "_api_finance", ["GET"], "守护面板：金融"),
+    ("/finance/funds", "_api_funds", ["GET"], "守护面板：基金行情"),
+    ("/finance/funds/refresh", "_api_funds_refresh", ["POST"], "守护面板：手动刷新基金行情"),
     ("/ledger", "_api_ledger", ["GET"], "守护面板：明细流水"),
     ("/finance_demo", "_api_finance_demo", ["GET"], "守护面板：金融演示数据"),
     ("/finance/help", "_api_finance_help", ["GET"], "守护面板：资金紧张"),

@@ -2,6 +2,7 @@
 """小日记：把真实事件交给 LLM 写成人话，失败回退事实陈述。"""
 from __future__ import annotations
 
+import json
 import logging
 logger = logging.getLogger("amo.watch")
 
@@ -53,6 +54,104 @@ async def rewrite(plugin, hint, mood="", long=False):
     text = str(text or "").strip().strip('"').strip("“”")
     if not text:
         return str(hint or "")
+    return text[:400]
+
+
+FUND_SYSTEM = (
+    "你是她的日记代笔。只根据给定的结构化交易事实、当前情绪、当前余额写日记；"
+    "不套模板、不写固定句子、不编造事实；她可以后悔、兴奋、无所谓、只写一句，完全由你决定。"
+    "不要复述 JSON，不要出现数值加成，不要写没有发生的消费或经历。"
+)
+
+
+def build_fund_prompt(fact, mood="", balance_yuan=0.0):
+    """结构化事实 + 情绪 + 余额 → 给 LLM 的日记素材；不含任何示例句子。"""
+    return (
+        "结构化交易事实（JSON）：%s\n当前情绪：%s\n当前可用余额：%.2f 元\n"
+        "请用她的第一人称写今天的小日记；写什么、写多长、什么态度都由你决定。"
+        % (json.dumps(fact or {}, ensure_ascii=False, sort_keys=True),
+           str(mood or "平静"), float(balance_yuan or 0.0))
+    )
+
+
+async def rewrite_fund_fact(bridge, amo, fact):
+    """让 LLM 基于事实自己写；没有 LLM 就什么也不写，绝不回退到模板句。"""
+    if amo is None or getattr(amo, "llm", None) is None:
+        return ""
+    try:
+        umos = amo._owner_umos() if hasattr(amo, "_owner_umos") else []
+        umo = umos[0] if umos else ""
+        mood = ""
+        try:
+            mood = str((bridge.mood() or {}).get("word") or "")
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
+        balance = 0.0
+        try:
+            balance = float(bridge.balance_cents() or 0) / 100.0
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
+        text = await amo.llm.chat_raw(umo, FUND_SYSTEM, build_fund_prompt(fact, mood, balance))
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
+        return ""
+    text = str(text or "").strip().strip('"').strip("“”")
+    if not text:
+        return ""
+    try:
+        bridge._small_diary(amo, text)
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
+        return ""
+    return text[:400]
+
+
+OUTAGE_SYSTEM = (
+    "你是她的日记代笔。只根据给定的结构化突发事实、当前情绪、当前余额写日记；"
+    "不套模板、不写固定句子、不编造事实；她可以庆幸、生气、无语、只写一句，完全由你决定。"
+    "不要复述 JSON，不要出现数值加成，不要写没有发生的消费或经历。"
+)
+
+
+def build_outage_prompt(fact, mood="", balance_yuan=0.0):
+    """突发事实 + 情绪 + 余额 → 给 LLM 的日记素材；不含任何示例句子。"""
+    return (
+        "结构化突发事实（JSON）：%s\n当前情绪：%s\n当前可用余额：%.2f 元\n"
+        "请用她的第一人称写今天的小日记；写什么、写多长、什么态度都由你决定。"
+        % (json.dumps(fact or {}, ensure_ascii=False, sort_keys=True),
+           str(mood or "平静"), float(balance_yuan or 0.0))
+    )
+
+
+async def rewrite_fund_outage(bridge, amo, fact):
+    """让 LLM 基于突发事实自己写；没有 LLM 就什么也不写。"""
+    if amo is None or getattr(amo, "llm", None) is None:
+        return ""
+    try:
+        umos = amo._owner_umos() if hasattr(amo, "_owner_umos") else []
+        umo = umos[0] if umos else ""
+        mood = ""
+        try:
+            mood = str((bridge.mood() or {}).get("word") or "")
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
+        balance = 0.0
+        try:
+            balance = float(bridge.balance_cents() or 0) / 100.0
+        except Exception as exc:
+            logger.debug("[WATCH] optional step failed: %r", exc)
+        text = await amo.llm.chat_raw(umo, OUTAGE_SYSTEM, build_outage_prompt(fact, mood, balance))
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
+        return ""
+    text = str(text or "").strip().strip('"').strip("“”")
+    if not text:
+        return ""
+    try:
+        bridge._small_diary(amo, text)
+    except Exception as exc:
+        logger.debug("[WATCH] optional step failed: %r", exc)
+        return ""
     return text[:400]
 
 

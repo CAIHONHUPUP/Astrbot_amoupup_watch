@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import re
 import time
@@ -405,7 +406,7 @@ class FinanceLink:
         return "其他", "日常", text, text
 
     async def expense(self, amount_cents, reason, idem, necessary=False, quiet=False,
-                      category="", sub_category="", item_name="", trigger_reason=""):
+                      category="", sub_category="", item_name="", trigger_reason="", diary=True):
         """quiet=True：日常逐笔消费——只写小日记，不进长期记忆（日终按分类汇总再记）。"""
         amo = self._amo()
         if amo is None:
@@ -444,7 +445,8 @@ class FinanceLink:
         if necessary:
             steps["schedule"] = self._schedule(amo, "支出", int(amount_cents),
                                                note=str(reason or ""))
-        steps["diary"] = self.small_diary(text)
+        if diary:
+            steps["diary"] = self.small_diary(text)
         if not quiet:
             steps["memory"] = await self._tier("long", text, idem + ":mem", tag="expense")
         try:
@@ -455,7 +457,7 @@ class FinanceLink:
             isolated("finance.expense.summary", exc)
         return {"ok": True, "mood": after, "steps": steps}
 
-    async def trade_pnl(self, pnl_cents, ratio, symbol, idem):
+    async def trade_pnl(self, pnl_cents, ratio, symbol, idem, diary=True, memory=True):
         amo = self._amo()
         if amo is None:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
@@ -467,13 +469,16 @@ class FinanceLink:
             "交易盈利" if int(pnl_cents) >= 0 else "交易亏损", abs(int(pnl_cents)),
             int(self.balance_cents() or 0),
             item="%s 收益率 %+.2f%%" % (symbol or "交易", float(ratio) * 100))
-        steps["diary"] = self.small_diary(text)
+        if diary:
+            steps["diary"] = self.small_diary(text)
         if abs(int(pnl_cents)) >= 100000:
             steps["schedule"] = self._schedule(amo, "大额交易", pnl_cents,
                                                note=str(symbol or ""))
-            steps["long_diary"] = self.small_diary(text)
-        steps["memory"] = await self._tier("short", text, idem + ":mem",
-                                           related=str(symbol or ""), tag="pnl")
+            if diary:
+                steps["long_diary"] = self.small_diary(text)
+        if memory:
+            steps["memory"] = await self._tier("short", text, idem + ":mem",
+                                               related=str(symbol or ""), tag="pnl")
         return {"ok": True, "mood": after, "steps": steps}
 
     async def borrow(self, amount_cents, reason, idem, months=12):
@@ -651,8 +656,88 @@ class FinanceLink:
         return {"ok": True, "mood": after, "steps": steps}
 
     # ---------- 交易 / 收盘：结构化记忆（供交易模块调用） ----------
+    async def record_fund_fact(self, action, name, code, amount_cents, shares=0.0, nav=0.0,
+                               fee_cents=0, pnl_cents=0, idem="", when=""):
+        """只存结构化事实；日记由 LLM 依据事实+情绪+余额自己写，绝不拼模板。"""
+        now_ts = time.time()
+        local = time.localtime(now_ts)
+        day = time.strftime("%Y-%m-%d", local)
+        clock = str(when or time.strftime("%H:%M", local))
+        fund_name = str(name or code or "")
+        idem = str(idem or ("fund_fact:%s:%s:%d" % (action, code, int(now_ts * 1000))))
+        fact = {
+            "action": str(action),
+            "fund_name": fund_name,
+            "code": str(code or ""),
+            "amount": round(int(amount_cents or 0) / 100.0, 2),
+            "amount_cents": int(amount_cents or 0),
+            "shares": round(float(shares or 0), 2),
+            "nav": round(float(nav or 0), 4),
+            "fee": round(int(fee_cents or 0) / 100.0, 2),
+            "pnl": round(int(pnl_cents or 0) / 100.0, 2),
+            "time": clock,
+            "day": day,
+        }
+        repo = getattr(self.plugin, "finance_repo", None)
+        if repo is not None:
+            try:
+                repo.add_fund_trade_fact(
+                    idem, fact["action"], fact["code"], fact["fund_name"],
+                    fact["amount_cents"], fact["shares"], fact["nav"],
+                    int(fee_cents or 0), int(pnl_cents or 0), day=day, ts=now_ts)
+            except Exception as exc:
+                isolated("finance.fund_fact.save", exc)
+        payload = json.dumps(fact, ensure_ascii=False, sort_keys=True)
+        ok = False
+        try:
+            ok = bool(await self._tier("long", payload, idem + ":mem", tag="fund_trade"))
+        except Exception as exc:
+            isolated("finance.fund_fact.memory", exc)
+        amo = self._amo()
+        if amo is not None and getattr(amo, "llm", None) is not None:
+            try:
+                import asyncio
+                from ..services.diary_engine import rewrite_fund_fact
+                asyncio.get_running_loop().create_task(rewrite_fund_fact(self, amo, fact))
+            except Exception as exc:
+                isolated("finance.fund_fact.diary", exc)
+        return {"ok": bool(ok), "verified": bool(ok), "fact": fact}
+
+    async def record_fund_outage(self, fact, idem=""):
+        """基金估值全挂：只落结构化事实 + JSON 记忆；感受交给 LLM 日记。"""
+        fact = dict(fact or {})
+        day = str(fact.get("day") or time.strftime("%Y-%m-%d"))
+        idem = str(idem or ("fund_outage:%s:%d" % (day, int(time.time() * 1000))))
+        try:
+            repo = getattr(self.plugin, "finance_repo", None)
+            if repo is not None:
+                repo.add_event("fund_outage", status=str(fact.get("action") or ""),
+                               extra=fact, day=day, idem=idem)
+        except Exception as exc:
+            isolated("finance.fund_outage.event", exc)
+        payload = json.dumps(fact, ensure_ascii=False, sort_keys=True)
+        ok = False
+        try:
+            ok = bool(await self._tier("short", payload, idem + ":mem", tag="fund_outage"))
+        except Exception as exc:
+            isolated("finance.fund_outage.memory", exc)
+        amo = self._amo()
+        if amo is not None and getattr(amo, "llm", None) is not None:
+            try:
+                import asyncio
+                from ..services.diary_engine import rewrite_fund_outage
+                asyncio.get_running_loop().create_task(rewrite_fund_outage(self, amo, fact))
+            except Exception as exc:
+                isolated("finance.fund_outage.diary", exc)
+        return {"ok": bool(ok), "fact": fact}
+
     async def record_trade(self, side, kind, name, code, price, qty, amount_cents, fee_cents=0,
                            pnl_cents=0, pnl_pct=0.0, holding_qty=0, idem=""):
+        if str(kind) == "fund":
+            return await self.record_fund_fact(
+                "buy_fund" if str(side) == "buy" else "sell_fund",
+                name, code, amount_cents, shares=qty, nav=price,
+                fee_cents=fee_cents, pnl_cents=pnl_cents, idem=idem)
         word = self.mood()["word"]
         when = time.strftime("%Y-%m-%d %H:%M")
         label = "股票" if str(kind) == "stock" else "基金"

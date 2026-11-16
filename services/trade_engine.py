@@ -9,12 +9,19 @@
 from __future__ import annotations
 
 import datetime as _dt
+import inspect
 
 try:
+    from ..guard import isolated
     from ..utils.helpers import fund_cutoff, in_session, next_trading_day
 except ImportError:  # 按文件/顶层包加载时
+    from guard import isolated
     from utils.helpers import fund_cutoff, in_session, next_trading_day
 from .market_api import fetch_quotes
+try:
+    from .fund_api import fetch_fund_quote
+except ImportError:  # 直接按文件加载时
+    from services.fund_api import fetch_fund_quote
 
 COMMISSION_RATE = 0.00025
 MIN_COMMISSION_CENTS = 500
@@ -65,6 +72,36 @@ class Trading:
             return {"code": str(code), "name": "", "price": float(price), "prev_close": float(price)}
         rows = fetch_quotes([code])
         return rows.get(str(code))
+
+    def _fund_quote(self, code):
+        return fetch_fund_quote(code)
+
+    async def _record_fund_fact(self, action, name, code, amount, shares, nav, fee, pnl, idem,
+                                holding_qty=0):
+        """生产环境走结构化事实；旧测试假对象没有新方法时退回 record_trade。"""
+        recorder = getattr(self.finance, "record_fund_fact", None)
+        if callable(recorder):
+            return await recorder(
+                action, name, code, amount, shares, nav, fee, pnl,
+                idem=idem, when=self._now().strftime("%H:%M"))
+        fallback = getattr(self.finance, "record_trade", None)
+        if callable(fallback):
+            side = "buy" if action == "buy_fund" else "sell"
+            return await fallback(side, "fund", name, code, nav, shares,
+                                  amount, fee, pnl, holding_qty=holding_qty, idem=idem)
+        return None
+
+    def _debit_fund(self, wallet, amount, label, code, idem):
+        """基金扣款：优先写结构化字段，旧钱包只记机器码；不拼任何拟人句。"""
+        try:
+            if "item_name" in inspect.signature(wallet.debit).parameters:
+                return wallet.debit(
+                    amount, "buy_fund", idem, category="投资", sub_category="基金",
+                    item_name=str(label or code), trigger_reason="14:50",
+                    actor="watch", fund_source="watch")
+        except Exception as exc:
+            isolated("finance.fund.debit_meta", exc)
+        return wallet.debit(amount, "buy_fund", idem)
 
     def _day(self):
         return self._now().date().isoformat()
@@ -204,7 +241,7 @@ class Trading:
             "pnl": pnl_cents / 100.0, "pnl_pct": ratio * 100}
 
     # ---------- 基金 ----------
-    async def subscribe(self, code, amount_cents, nav=None, idem=""):
+    async def subscribe(self, code, amount_cents, nav=None, idem="", name=""):
         code = str(code).strip()
         amount = int(float(amount_cents or 0))
         if amount <= 0:
@@ -212,7 +249,20 @@ class Trading:
         wallet = self._wallet()
         if wallet is None:
             return {"ok": False, "message": "钱包未就绪"}
-        nav = float(nav or 1.0)
+        if not name:
+            pos0 = self.repo.position("fund", code) or {}
+            name = str(pos0.get("name") or "")
+        if not nav or float(nav) <= 0:
+            # 没传净值时现取：只用「今日估值可用」的行情，拿不到就当天不交易
+            quote = await self.runtime.run_io(self._fund_quote, code, timeout=12) or {}
+            if not quote.get("tradeable"):
+                return {"ok": False, "message": "今天这只基金没有可用估值，跳过交易"}
+            nav = float(quote.get("estimate") or 0)
+            name = name or str(quote.get("name") or "")
+        nav = float(nav)
+        if nav <= 0:
+            return {"ok": False, "message": "没有可用净值，跳过交易"}
+        label = name if name and name != code else code
         fee = int(round(amount * FUND_BUY_RATE))
         shares = round((amount - fee) / (nav * 100.0), 2)
         idem = str(idem or ("fund_buy:%s:%s" % (code, self._now().strftime("%Y%m%d%H%M%S"))))
@@ -220,19 +270,24 @@ class Trading:
             return {"ok": False, "message": "投资不能超过存款的 50%"}
         if int(wallet.balance()) < amount:
             return {"ok": False, "message": "余额不足，无法支付申购费用"}
-        if not wallet.debit(amount, "申购基金 %s" % code, idem):
+        if not self._debit_fund(wallet, amount, label, code, idem):
             return {"ok": False, "message": "余额不足，无法支付申购费用"}
         pos = self.repo.position("fund", code) or {"qty": 0, "cost_cents": 0, "available": 0}
         total = float(pos["qty"]) + shares
         avg = int(round((float(pos["cost_cents"]) * float(pos["qty"]) + amount) / total))
-        self.repo.upsert_position("fund", code, "", total, avg, int(round(nav * 100)),
+        self.repo.upsert_position("fund", code, label, total, avg, int(round(nav * 100)),
                                   float(pos["available"]), self._ready_day("fund", self._now()))
-        self.repo.add_trade(idem, "subscribe", "fund", code, "", shares, int(round(nav * 100)),
+        self.repo.add_trade(idem, "subscribe", "fund", code, label, shares, int(round(nav * 100)),
                             amount, fee, 0, "T+1 确认" if fund_cutoff(self._now()) else "顺延下一交易日")
-        await self.finance.record_trade("buy", "fund", code, code, nav, shares, amount - fee, fee,
-                                        holding_qty=int(total), idem=idem)
-        return {"ok": True, "message": "申购 %s，金额 %.2f，份额 %.2f" % (code, amount / 100.0, shares),
-                "shares": shares}
+        try:
+            await self._record_fund_fact(
+                "buy_fund", label, code, amount, shares, nav, fee, 0, idem,
+                holding_qty=int(total))
+        except Exception as exc:
+            isolated("finance.fund.fact", exc)
+        return {"ok": True, "action": "buy_fund", "code": code, "name": label,
+                "amount_cents": amount, "shares": shares,
+                "message": "buy_fund %s amount_cents=%d shares=%.2f" % (code, amount, shares)}
 
     async def redeem(self, code, shares, nav=None, idem=""):
         code = str(code).strip()
@@ -242,7 +297,16 @@ class Trading:
         pos = self.repo.position("fund", code)
         if not pos or float(pos["available"]) < shares:
             return {"ok": False, "message": "可赎回份额不足（T+1 确认后才能赎回）"}
-        nav = float(nav or (float(pos["last_cents"]) / 100.0))
+        name = str(pos.get("name") or code)
+        if not nav or float(nav) <= 0:
+            quote = await self.runtime.run_io(self._fund_quote, code, timeout=12) or {}
+            if not quote.get("tradeable"):
+                return {"ok": False, "message": "今天这只基金没有可用估值，跳过交易"}
+            nav = float(quote.get("estimate") or 0)
+            name = str(quote.get("name") or name)
+        nav = float(nav)
+        if nav <= 0:
+            return {"ok": False, "message": "没有可用净值，跳过交易"}
         amount = int(round(nav * shares * 100))
         fee = int(round(amount * FUND_SELL_RATE))
         idem = str(idem or ("fund_sell:%s:%s" % (code, self._now().strftime("%Y%m%d%H%M%S"))))
@@ -257,13 +321,24 @@ class Trading:
         if left <= 0.01:
             self.repo.delete_position("fund", code)
         else:
-            self.repo.upsert_position("fund", code, pos["name"], left, int(pos["cost_cents"]),
+            self.repo.upsert_position("fund", code, name, left, int(pos["cost_cents"]),
                                       int(round(nav * 100)), max(0.0, float(pos["available"]) - shares))
-        self.repo.add_trade(idem, "redeem", "fund", code, pos["name"], shares,
+        self.repo.add_trade(idem, "redeem", "fund", code, name, shares,
                             int(round(nav * 100)), amount, fee, pnl, "赎回")
-        await self.finance.trade_pnl(pnl, (nav - avg) / avg if avg else 0.0, code, idem)
-        return {"ok": True, "message": "赎回 %s %.2f 份，实现盈亏 %.2f" % (code, shares, pnl / 100.0),
-                "pnl": pnl / 100.0}
+        try:
+            await self.finance.trade_pnl(pnl, (nav - avg) / avg if avg else 0.0, code, idem,
+                                         diary=False, memory=False)
+        except Exception as exc:
+            isolated("finance.fund.pnl", exc)
+        try:
+            await self._record_fund_fact(
+                "sell_fund", name, code, amount, shares, nav, fee, pnl, idem,
+                holding_qty=int(left))
+        except Exception as exc:
+            isolated("finance.fund.fact", exc)
+        return {"ok": True, "action": "sell_fund", "code": code, "name": name,
+                "shares": shares, "pnl_cents": pnl, "pnl": pnl / 100.0,
+                "message": "sell_fund %s shares=%.2f pnl_cents=%d" % (code, shares, pnl)}
 
     # ---------- T+1 可用份额 ----------
     def refresh_available(self):

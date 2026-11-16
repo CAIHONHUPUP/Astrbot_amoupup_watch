@@ -20,6 +20,9 @@ class FakeRepo:
     def positions(self):
         return []
 
+    def fund_quotes(self, day=""):
+        return []
+
 
 class FakeFinance:
     def balance_cents(self):
@@ -27,6 +30,9 @@ class FakeFinance:
 
     def mood(self):
         return {"word": "平静", "score": 60}
+
+    async def record_fund_outage(self, fact, idem=""):
+        return {"ok": True}
 
 
 class FakeRuntime:
@@ -51,7 +57,7 @@ def test_quotes_failure_blocks_trading_for_the_day():
     assert repo.meta_get("news_fail:2026-11-16") == "quotes"
     # 当天后续时点不再交易
     again = asyncio.run(dec.run_slot("close", dt.datetime(2026, 11, 16, 14, 50)))
-    assert again["skipped"] == "data_failed"
+    assert again["skipped"] in ("data_failed", "fund_outage")
 
 
 def test_news_quota_is_three_per_day():
@@ -63,7 +69,7 @@ def test_news_quota_is_three_per_day():
         return {"600519": {"price": 1650.0, "prev_close": 1620.0, "name": "贵州茅台"}}
 
     dec._refresh = _quotes
-    result = asyncio.run(dec.run_slot("close", dt.datetime(2026, 11, 16, 14, 50)))
+    result = asyncio.run(dec.run_slot("morning", dt.datetime(2026, 11, 16, 9, 30)))
     assert result["skipped"] == "news_quota"
 
 

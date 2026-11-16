@@ -44,8 +44,8 @@ async def process_pending(plugin):
             if kind == "withdrawable":
                 amo.wallet.credit(amount, "卖出资金可取", idem + ":w", account="withdrawable")
             elif kind == "cash_withdrawable":
-                amo.wallet.credit(amount, "基金赎回到账", idem)
-                amo.wallet.credit(amount, "基金赎回可取", idem + ":w", account="withdrawable")
+                amo.wallet.credit(amount, "fund_redeem_cash", idem)
+                amo.wallet.credit(amount, "fund_redeem_withdrawable", idem + ":w", account="withdrawable")
             await plugin.runtime.run_db(repo.finish_pending, idem, timeout=5)
         except Exception as exc:
             isolated("finance.pending.apply", exc)
@@ -131,6 +131,11 @@ async def finance_tick(plugin):
         if plugin.finance_help is not None:
             plugin.finance_help.maybe_reset()
             await plugin._guard_step("help_repay", plugin.finance_help.repay_tick())
+        try:
+            from ..services.fund_market import fund_market_tick
+        except ImportError:
+            from services.fund_market import fund_market_tick
+        await plugin._guard_step("fund_market", fund_market_tick(plugin))
         if plugin.finance_decision is not None:
             await plugin._guard_step("decision", plugin.finance_decision.tick())
         if plugin.finance_daily is not None:
