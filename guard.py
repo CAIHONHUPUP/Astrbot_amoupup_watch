@@ -56,7 +56,8 @@ def isolated(scope: str, exc: BaseException, limit: int = _LIMIT, window: float 
     with _lock:
         _counts[scope] = _counts.get(scope, 0) + 1
         count = _counts[scope]
-        allow = now - _last.get(key, 0.0) >= window
+        last = _last.get(key)
+        allow = last is None or now - last >= window
         if allow:
             _last[key] = now
     tid = trace_id()
