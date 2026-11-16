@@ -23,7 +23,7 @@ def _optional_hook(name):
 class ToolWrappersMixin:
         @_optional_hook("llm_tool")("buy_insurance")
 
-        async def buy_insurance(self, event, insurance_type: str = ""):
+        async def buy_insurance(self, event=None, insurance_type: str = ""):
 
             """主动购买商业保险：e生保/医无忧/金钟罩/重疾险/交强险/商业车险/家财险。"""
 
@@ -41,7 +41,7 @@ class ToolWrappersMixin:
 
         @_optional_hook("llm_tool")("buy_gift")
 
-        async def buy_gift(self, event, target_name: str = "", gift_name: str = "", price: float = 0.0):
+        async def buy_gift(self, event=None, target_name: str = "", gift_name: str = "", price: float = 0.0):
 
             """给家人/朋友买生日礼物，会自动扣款并写记忆。"""
 
@@ -59,7 +59,7 @@ class ToolWrappersMixin:
 
         @_optional_hook("llm_tool")("deposit_money")
 
-        async def deposit_money(self, event, amount: float = 0.0, account_type: str = "current", term_months: int = 0):
+        async def deposit_money(self, event=None, amount: float = 0.0, account_type: str = "current", term_months: int = 0):
 
             """把闲钱存成活期/定期（定期期限 3/6/12/36 个月），由她自己决定。"""
 
@@ -76,7 +76,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("make_date")
-        async def make_date_tool(self, event, title: str = "", when: str = "", deposit: float = 0):
+        async def make_date_tool(self, event=None, title: str = "", when: str = "", deposit: float = 0):
 
             """约好一件事：写进日程并进入期待状态。when 例：2026-11-15 18:00 / 明天18:00。"""
 
@@ -95,7 +95,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("cancel_date")
-        async def cancel_date_tool(self, event, title: str = "", reason: str = ""):
+        async def cancel_date_tool(self, event=None, title: str = "", reason: str = ""):
 
             """用户临时去不了/放鸽子：触发情绪、定金、安慰消费、冷淡和记忆。"""
 
@@ -114,7 +114,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("attend_date")
-        async def attend_date_tool(self, event, title: str = "", mode: str = ""):
+        async def attend_date_tool(self, event=None, title: str = "", mode: str = ""):
 
             """赴约结算：置装、买单模式（老公请客/她请客/AA）、约会中状态。"""
 
@@ -133,7 +133,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("confirm_arrival")
-        async def confirm_arrival(self, event, activity_name: str = ""):
+        async def confirm_arrival(self, event=None, activity_name: str = ""):
 
             """等待赴约时，确认老公已经到达（好/到了/我来了）。"""
 
@@ -149,7 +149,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("rent_out_property")
-        async def rent_out_property(self, event, property_name: str = "", rent: float = 0.0):
+        async def rent_out_property(self, event=None, property_name: str = "", rent: float = 0.0):
 
             """自主决定出租闲置自有房产（房租压力大/空着浪费时）。"""
 
@@ -165,7 +165,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("sell_property")
-        async def sell_property(self, event, property_name: str = ""):
+        async def sell_property(self, event=None, property_name: str = ""):
 
             """自主决定出售闲置房产（急需用钱时）。"""
 
@@ -181,7 +181,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("propose_date")
-        async def propose_date_tool(self, event, activity: str = "", time: str = ""):
+        async def propose_date_tool(self, event=None, activity: str = "", time: str = ""):
 
             """老公提议吃火锅/逛街/看电影时，答应并写进日程。"""
 
@@ -197,7 +197,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("accept_social_event")
-        async def accept_social_event(self, event, npc: str = "", place: str = "",
+        async def accept_social_event(self, event=None, npc: str = "", place: str = "",
                                       amount: float = 0.0, note: str = "",
                                       start: str = "", end: str = "",
                                       about_user: str = ""):
@@ -214,7 +214,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("reject_social_event")
-        async def reject_social_event(self, event, reason: str = "", note: str = ""):
+        async def reject_social_event(self, event=None, reason: str = "", note: str = ""):
             """婉拒邀约：说清真实理由（太累/没钱/不想去），不扣钱也不占日程。"""
             try:
                 from .core.llm_tools import reject_social_event_tool
@@ -224,7 +224,7 @@ class ToolWrappersMixin:
 
 
         @_optional_hook("llm_tool")("buy_stock")
-        async def buy_stock(self, event, code: str = "", qty: int = 100, price: float = 0.0):
+        async def buy_stock(self, event=None, code: str = "", qty: int = 100, price: float = 0.0):
             """她决定买入股票时调用：真实行情/余额/手续费校验。"""
             try:
                 from .core.llm_tools import buy_stock_tool
@@ -233,7 +233,7 @@ class ToolWrappersMixin:
             return await buy_stock_tool(self, event, code, qty, price)
 
         @_optional_hook("llm_tool")("sell_stock")
-        async def sell_stock(self, event, code: str = "", qty: int = 100, price: float = 0.0):
+        async def sell_stock(self, event=None, code: str = "", qty: int = 100, price: float = 0.0):
             """她决定卖出股票时调用：更新持仓、入账并写流水。"""
             try:
                 from .core.llm_tools import sell_stock_tool
@@ -242,7 +242,7 @@ class ToolWrappersMixin:
             return await sell_stock_tool(self, event, code, qty, price)
 
         @_optional_hook("llm_tool")("buy_fund")
-        async def buy_fund(self, event, code: str = "", amount: float = 0.0, nav: float = 0.0):
+        async def buy_fund(self, event=None, code: str = "", amount: float = 0.0, nav: float = 0.0):
             """她决定申购基金时调用：amount 是元；扣款、持仓、流水。"""
             try:
                 from .core.llm_tools import buy_fund_tool
@@ -251,7 +251,7 @@ class ToolWrappersMixin:
             return await buy_fund_tool(self, event, code, amount, nav)
 
         @_optional_hook("llm_tool")("sell_fund")
-        async def sell_fund(self, event, code: str = "", shares: float = 0.0, nav: float = 0.0):
+        async def sell_fund(self, event=None, code: str = "", shares: float = 0.0, nav: float = 0.0):
             """她决定赎回基金时调用：份额、手续费、T+7 到账。"""
             try:
                 from .core.llm_tools import sell_fund_tool
@@ -260,7 +260,7 @@ class ToolWrappersMixin:
             return await sell_fund_tool(self, event, code, shares, nav)
 
         @_optional_hook("llm_tool")("send_message_to_user")
-        async def send_message_to_user(self, event, text: str = ""):
+        async def send_message_to_user(self, event=None, text: str = ""):
             """主动给老公发一条消息：text 是你此刻想说的话，不是系统提示。"""
             try:
                 from .core.fund_actions import send_message_to_user_action
@@ -270,7 +270,7 @@ class ToolWrappersMixin:
             return "（系统）已发送。" if out.get("ok") else "（系统）没发出去：%s" % out.get("message")
 
         @_optional_hook("llm_tool")("skip_fund_trade")
-        async def skip_fund_trade(self, event, reason: str = ""):
+        async def skip_fund_trade(self, event=None, reason: str = ""):
             """主动放弃今天的基金交易：reason 是你自己的理由。"""
             try:
                 from .core.fund_actions import skip_fund_trade_action
@@ -280,7 +280,7 @@ class ToolWrappersMixin:
             return "（系统）已跳过基金交易。"
 
         @_optional_hook("llm_tool")("reallocate_funds")
-        async def reallocate_funds(self, event, target: str = "keep", amount: float = 0.0,
+        async def reallocate_funds(self, event=None, target: str = "keep", amount: float = 0.0,
                                    term_months: int = 0, note: str = ""):
             """把钱挪作他用：target=deposit_fixed/deposit_current/shopping/keep；amount 是元。"""
             try:
@@ -295,7 +295,7 @@ class ToolWrappersMixin:
 
 
 @_optional_hook("llm_tool")("modify_date")
-async def modify_date_tool(self, event, activity: str = "", time: str = ""):
+async def modify_date_tool(self, event=None, activity: str = "", time: str = ""):
     """老公改时间：新的时间顶掉旧的 pending，日程里只留一条。"""
     try:
         from .core.llm_tools import propose_date_tool

@@ -115,8 +115,15 @@ def provider_surface(dir_path, cls_name=None):
                                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
                     break
         else:
-            targets = [n for n in ast.walk(tree)
-                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            # 只收“实例方法”（首参 self/cls）：引擎模块里的 current_activity(plugin, now)
+            # 这类函数不是 amo 实例接口，混进来会把快照搅乱（2026-11-16）。
+            targets = []
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                args = list(node.args.args)
+                if not args or args[0].arg in ("self", "cls"):
+                    targets.append(node)
         for fn in targets:
             params = {a.arg for a in list(fn.args.args) + list(fn.args.kwonlyargs)
                       if a.arg not in ("self", "cls")}
