@@ -811,7 +811,9 @@
         : "约饭 · 送礼 · 吵架 · 和好";
     }
     if (!box) return;
-    var list = evs || [];
+    var list = (evs || []).filter(function (e) {
+      return String((e && e.kind) || "").indexOf("social:") === 0;
+    });
     var seen = {};
     list = list.filter(function (e) {
       var key = String(e.id || "") + "|" + String((e.payload || {}).text || "") + "|" + String(e.kind || "");
@@ -820,7 +822,7 @@
       return true;
     });
     if (!list.length) {
-      box.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无动态<br><span>有邀约、随礼、答应或婉拒时才会记在这里</span></div>';
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无动态<br><span>只记约饭、送礼、吵架、和好这类关系事件</span></div>';
       return;
     }
     var pad = function (n) { return ("0" + n).slice(-2); };
@@ -837,28 +839,43 @@
       if (k.indexOf("criticism") >= 0) return "被批评";
       return "动态";
     };
-    box.innerHTML = list.map(function (e) {
+    var stripCode = function (s) {
+      var t = String(s == null ? "" : s);
+      t = t.replace(/(^|[^A-Za-z0-9])[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+/g, "$1");
+      return t.trim();
+    };
+    var items = [];
+    list.forEach(function (e) {
       var p = e.payload || {};
       var when = e.day || "";
       try {
         var t = new Date((Number(e.created_at) || 0) * 1000);
         when = pad(t.getMonth() + 1) + "-" + pad(t.getDate()) + " " + pad(t.getHours()) + ":" + pad(t.getMinutes());
       } catch (err) { }
-      var text = e.display || p.text || p.fallback || "";
+      var text = stripCode(e.display || p.text || p.fallback || "");
       if (!text) {
         if (String(e.kind || "").indexOf("invite") >= 0) {
           text = (p.npc || "") + (p.place ? (" 约你去" + p.place + (p.label ? " " + p.label : "")) : " 发来一条邀约");
         } else {
-          text = (p.npc || "") + " " + (p.status || "");
+          text = (p.npc || "") + (p.status ? (" " + p.status) : "");
         }
+        text = stripCode(text);
       }
-      return '<div class="item"><div class="k">' + esc(p.npc || "社交") + '</div>'
+      // 翻不出人话的动态宁可不显示，也绝不把代码变量名放上屏幕
+      if (!text) return;
+      var who = p.npc || label(e.kind);
+      items.push('<div class="item"><div class="k">' + esc(who) + '</div>'
         + '<div class="v" style="font-size:13px;font-weight:500">' + esc(text) + '</div>'
         + '<div class="s">' + esc(when) + '</div>'
         + ((p.day && p.start) ? ('<div class="s">对应日程：' + esc(p.day) + ' '
           + esc(p.start) + '-' + esc(p.end || "") + ' ' + esc(p.topic || "") + '</div>') : '')
-        + '</div>';
-    }).join("");
+        + '</div>');
+    });
+    if (!items.length) {
+      box.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无动态<br><span>只记约饭、送礼、吵架、和好这类关系事件</span></div>';
+      return;
+    }
+    box.innerHTML = items.join("");
   }
   function renderMedical() {
     var box = q("medicalBox");

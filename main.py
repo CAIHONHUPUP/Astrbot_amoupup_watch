@@ -87,7 +87,7 @@ ROUTES = _load(_PKG, "api.routes", "ROUTES")
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
-PLUGIN_VERSION = "1.0.8"
+PLUGIN_VERSION = "1.1.0"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag", "finance"]
 

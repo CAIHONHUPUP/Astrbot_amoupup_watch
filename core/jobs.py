@@ -25,10 +25,19 @@ except ImportError:  # 直接按文件加载
 
 
 async def process_pending(plugin):
-    """到期的待入账：卖出资金 T+1 转可取，基金赎回 T+7 到账。"""
+    """到期的待入账：卖出资金 T+1 转可取，基金赎回 T+7 到账；顺带放行 T+1/T+2 份额。"""
     repo = plugin.finance_repo
+    if repo is None:
+        return
+    trading = getattr(plugin, "trading", None)
+    if trading is not None and hasattr(trading, "refresh_available"):
+        try:
+            # 以前只有启动时调一次：买完不重启就永远「可卖/可赎回份额不足」
+            await plugin.runtime.run_db(trading.refresh_available, timeout=5)
+        except Exception as exc:
+            isolated("finance.available.tick", exc)
     amo = plugin.finance._amo()
-    if repo is None or amo is None:
+    if amo is None:
         return
     today = time.strftime("%Y-%m-%d")
     try:

@@ -14,6 +14,9 @@ class FakeRuntime:
     async def run_io(self, fn, *args, timeout=None, **kwargs):
         return fn(*args, **kwargs)
 
+    async def run_db(self, fn, *args, timeout=None, **kwargs):
+        return fn(*args, **kwargs)
+
 
 class FakePlugin:
     def __init__(self, repo):
@@ -115,3 +118,67 @@ def test_facts_marks_stale_quote_not_tradeable(env):
                          "tradeable": False}}
     text = _market(repo, runtime).facts("2026-11-16", 100000, quotes)
     assert "今日估值不可用" in text
+
+
+def test_refresh_does_not_block_event_loop(monkeypatch):
+    import time as _time
+
+    class SlowRepo:
+        """模拟 sqlite：每次读写阻塞 50ms。"""
+
+        def __init__(self):
+            self.meta = {}
+            self.saved = []
+
+        def meta_get(self, key, default=None):
+            _time.sleep(0.05)
+            return self.meta.get(key, default)
+
+        def meta_set(self, key, value):
+            _time.sleep(0.05)
+            self.meta[key] = value
+
+        def save_fund_quotes(self, day, quotes):
+            _time.sleep(0.05)
+            self.saved.append((day, dict(quotes)))
+
+        def positions(self, kind=""):
+            return []
+
+        def upsert_position(self, *args, **kwargs):
+            return None
+
+    class ThreadRuntime:
+        async def run_io(self, fn, *args, timeout=None, **kwargs):
+            return await asyncio.to_thread(fn, *args, **kwargs)
+
+        async def run_db(self, fn, *args, timeout=None, **kwargs):
+            return await asyncio.to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(fm, "fetch_fund_quotes", lambda codes: dict(QUOTES))
+    repo = SlowRepo()
+    market = fm.FundMarket(object(), ThreadRuntime(), repo)
+    gaps = []
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+
+        async def beat():
+            last = loop.time()
+            while True:
+                await asyncio.sleep(0.005)
+                now = loop.time()
+                gaps.append(now - last)
+                last = now
+
+        task = asyncio.create_task(beat())
+        try:
+            return await market.refresh(dt.datetime(2026, 11, 16, 14, 50))
+        finally:
+            task.cancel()
+
+    out = asyncio.run(scenario())
+    assert out["ok"] is True and out["quotes"] == len(QUOTES)
+    assert len(repo.saved) == 1
+    # 旧实现同步写 sqlite 时事件循环会整段停住（≥50ms×3）；走 run_db 后保持毫秒级
+    assert max(gaps) < 0.08

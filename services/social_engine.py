@@ -46,6 +46,70 @@ KIND_PLACES = {
 KIND_BUDGET = {"meal": 12000, "drink": 8000, "shopping": 25000, "ceremony": 40000,
                "work": 0, "help": 0, "borrow": 60000, "other": 10000}
 
+#: 「最近关系动态」只认这些事件；别的模块（基金/股票/工具名）绝不许混进来。
+SOCIAL_KIND_PREFIX = "social:"
+SOCIAL_KINDS = ("social:invite", "social:accept", "social:reject", "social:expire",
+                "social:red", "social:repay", "social:default", "social:criticism")
+
+#: 代码变量名 → 人话；面板上永远不许出现 skip_fund_trade 这种带下划线的函数名
+ACTION_WORDS = {
+    "skip_fund_trade": "今天不想买基金了",
+    "reallocate_funds": "把钱挪去别处了",
+    "send_message_to_user": "想跟他说句话",
+    "buy_fund": "买了点基金",
+    "sell_fund": "卖了点基金",
+    "hold": "先观望",
+    "deposit": "存了笔钱",
+}
+_CODE_ONLY = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_CODE_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+(?![A-Za-z0-9])")
+
+
+def is_social_kind(kind):
+    """只认 social:* 的互动流水；social:status 是旧版长期状态，不算动态。"""
+    k = str(kind or "")
+    return k.startswith(SOCIAL_KIND_PREFIX) and k != "social:status"
+
+
+def _code_word(token):
+    return ACTION_WORDS.get(str(token or "").strip().strip("_").lower(), "")
+
+
+def humanize_dynamic(kind, payload):
+    """把一条动态翻成人话；翻不出来就返回空串（宁可少一条也不露代码）。"""
+    payload = payload if isinstance(payload, dict) else {}
+    raw = str(payload.get("text") or payload.get("fallback") or "").strip()
+    status = str(payload.get("status") or "").strip()
+    text = humanize_numbers(raw).strip()
+    if not text or _CODE_ONLY.match(text):
+        text = _code_word(text) or _code_word(status)
+    else:
+        text = _CODE_TOKEN.sub(lambda m: _code_word(m.group(0)), text).strip()
+    if not text or _CODE_ONLY.match(text) or _CODE_TOKEN.search(text):
+        return ""
+    return text
+
+
+def panel_events(rows, limit=None):
+    """接口层兜底：只留 social:* 事件，并把代码词洗掉；洗不干净的直接不返回。"""
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict) or not is_social_kind(row.get("kind")):
+            continue
+        text = humanize_dynamic(row.get("kind"), row.get("payload"))
+        if not text:
+            text = str(row.get("display") or "").strip()
+            if _CODE_ONLY.match(text) or _CODE_TOKEN.search(text):
+                text = ""
+        if not text:
+            continue
+        row = dict(row)
+        row["display"] = text
+        out.append(row)
+        if limit and len(out) >= int(limit):
+            break
+    return out
+
 MIN_GAP_HOURS = 2.5          # 两次邀约之间至少隔 2.5 小时
 MAX_PER_DAY = 2              # 一天最多 2 次邀约
 CEREMONY_LEAD_DAYS = 3       # 喜酒/婚礼至少提前 3 天
@@ -263,6 +327,9 @@ class SocialEngine:
     # ---------- 事件流水 ----------
     def record(self, kind, npc="", text="", status="", amount_cents=0, day="", extra=None,
                topic="", label="", place="", start="", end="", idem=""):
+        if not is_social_kind(kind):
+            isolated("social.record.reject", ValueError("非社交事件禁止写入: %s" % str(kind)[:40]))
+            return False
         if self.repo is None:
             return False
         clean = humanize_numbers(npc_roster.sanitize(text, npc))
@@ -298,13 +365,17 @@ class SocialEngine:
         cutoff = time.time() - 2 * 86400
         # 旧版曾把 NPC 长期状态写进事件表；这里兜底过滤，绝不再冒充互动流水。
         rows = [row for row in rows
-                if str(row.get("kind") or "") != "social:status"
+                if is_social_kind(row.get("kind"))
                 and float(row.get("created_at") or 0) >= cutoff][:limit]
+        out = []
         for row in rows:
             payload = row.get("payload") or {}
-            row["display"] = humanize_numbers(
-                str(payload.get("text") or payload.get("fallback") or "").strip())
-        return rows
+            text = humanize_dynamic(row.get("kind"), payload)
+            if not text:
+                continue
+            row["display"] = text
+            out.append(row)
+        return out
 
     # ---------- 待决邀约 ----------
     def pending_invite(self):

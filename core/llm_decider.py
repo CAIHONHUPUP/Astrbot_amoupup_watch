@@ -54,7 +54,7 @@ OUTAGE_PROMPT = """{facts}
 当前情绪：{mood}
 可用行动（只选一个，输出一行 JSON）：
 1. 主动给他发消息：{{"action":"send_message_to_user","text":"你自己想说的话"}}
-2. 放弃今天买基金：{{"action":"skip_fund_trade","reason":"你自己的理由"}}
+2. 放弃今天买基金（顺带跟他说一句，或留给日记）：{{"action":"skip_fund_trade","reason":"你自己的理由","text":"想跟他抱怨的一句话，可留空"}}
 3. 把钱挪作他用：{{"action":"reallocate_funds","target":"deposit_fixed|deposit_current|shopping|keep","amount":0,"term_months":0,"note":"你自己的话"}}
 amount 单位是元；定期只能选 3/6/12/36 个月；keep 表示先留着。"""
 
@@ -79,7 +79,8 @@ def parse_outage_decision(text):
         return {"action": "send_message_to_user", "text": message[:200]}
     if action == "skip_fund_trade":
         return {"action": "skip_fund_trade",
-                "reason": str(data.get("reason") or "").strip()[:120]}
+                "reason": str(data.get("reason") or "").strip()[:120],
+                "text": str(data.get("text") or data.get("message") or "").strip()[:200]}
     if action == "reallocate_funds":
         target = str(data.get("target") or "").strip().lower()
         if target not in ("deposit_fixed", "deposit_current", "shopping", "keep"):

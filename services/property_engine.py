@@ -306,47 +306,63 @@ class FinanceProperty:
             return False
 
     # ---------- 每月 1 日：还贷 / 物业费 / 养车 ----------
+    async def settle_loan(self, kind, now, period):
+        """单笔贷款结算：扣款 + 摊销本金 + 写 settled，幂等键 `<loan_kind>:<期>`。
+
+        自动代扣（settle_loans）和账单代缴（bill_flow.pay）都走这里，幂等键是
+        loan_kind:期，所以同一个月只会扣一次钱、只减一次本金；settled 写回后另一条入口自然跳过。
+        """
+        loan = self.loan(kind)
+        if not loan:
+            return {"ok": True, "status": "none", "kind": kind}
+        balance = int(loan.get("balance_cents") or 0)
+        if balance <= 0:
+            return {"ok": True, "status": "none", "kind": kind}
+        key = self.loan_kind(kind)
+        if self.repo.settled(period, key):
+            return {"ok": True, "status": "settled", "kind": kind}
+        rate = float(loan.get("rate") or 0)
+        interest = int(round(balance * rate / 12.0))
+        due = int(loan.get("monthly_cents") or 0)
+        amount = min(due, balance + interest)
+        name = "房贷" if kind == "house" else "车贷"
+        result = await self.finance.expense(amount, name, "%s:%s" % (key, period), necessary=True)
+        if not result.get("ok"):
+            await self._warn_short(name, amount, period)
+            return {"ok": False, "status": "insufficient", "amount": amount, "kind": kind}
+        principal_part = max(0, amount - interest)
+        new_balance = max(0, balance - principal_part)
+        self.repo.update_loan(int(loan.get("id") or 0), new_balance,
+                              "closed" if new_balance <= 0 else "")
+        self.repo.mark_settled(period, key, str({"amount": amount, "interest": interest,
+                                                 "balance": new_balance,
+                                                 "principal": principal_part}))
+        mood = ""
+        try:
+            mood = str(self.finance.mood().get("word") or "")
+        except Exception:
+            mood = ""
+        text = ("今天还了%s %s，其中利息 %s，本金还剩 %s。%s"
+                % (name, ("%.2f 元" % (amount / 100.0)), ("%.2f 元" % (interest / 100.0)),
+                   ("%.2f 万" % (new_balance / 1000000.0)), mood or "日子得慢慢过"))
+        await self._remember(text, "repay:%s:%s" % (key, period))
+        self._long_diary(text)
+        return {"ok": True, "status": "paid", "kind": kind, "amount": amount,
+                "interest": interest, "principal": principal_part, "balance": new_balance}
+
     async def settle_loans(self, now, period):
         cfg = getattr(getattr(self, "plugin", None), "cfg_bool", None)
         if callable(cfg) and not cfg("bill_autopay", True):
             return {"ok": True, "deferred": True, "stage": "bill"}
         done = []
         for kind in ("house", "car"):
-            loan = self.loan(kind)
-            if not loan:
-                continue
-            balance = int(loan.get("balance_cents") or 0)
-            if balance <= 0:
-                continue
-            key = self.loan_kind(kind)
-            if self.repo.settled(period, key):
-                continue
-            rate = float(loan.get("rate") or 0)
-            interest = int(round(balance * rate / 12.0))
-            due = int(loan.get("monthly_cents") or 0)
-            amount = min(due, balance + interest)
-            name = "房贷" if kind == "house" else "车贷"
-            result = await self.finance.expense(amount, name, "%s:%s" % (key, period), necessary=True)
-            if not result.get("ok"):
-                await self._warn_short(name, amount, period)
+            result = await self.settle_loan(kind, now, period)
+            status = str(result.get("status") or "")
+            if status == "insufficient":
                 return {"ok": False, "reason": "insufficient", "kind": kind}
-            principal_part = max(0, amount - interest)
-            new_balance = max(0, balance - principal_part)
-            self.repo.update_loan(int(loan.get("id") or 0), new_balance,
-                                  "closed" if new_balance <= 0 else "")
-            self.repo.mark_settled(period, key, str({"amount": amount, "interest": interest,
-                                                     "balance": new_balance}))
-            mood = ""
-            try:
-                mood = str(self.finance.mood().get("word") or "")
-            except Exception:
-                mood = ""
-            text = ("今天还了%s %s，其中利息 %s，本金还剩 %s。%s"
-                    % (name, ("%.2f 元" % (amount / 100.0)), ("%.2f 元" % (interest / 100.0)),
-                       ("%.2f 万" % (new_balance / 1000000.0)), mood or "日子得慢慢过"))
-            await self._remember(text, "repay:%s:%s" % (key, period))
-            self._long_diary(text)
-            done.append({"kind": kind, "amount": amount, "balance": new_balance})
+            if status == "paid":
+                done.append({"kind": kind, "amount": result.get("amount"),
+                             "balance": result.get("balance")})
         return {"ok": True, "done": done}
 
     async def _warn_short(self, name, amount, period):

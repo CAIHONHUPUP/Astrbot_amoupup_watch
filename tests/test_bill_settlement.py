@@ -87,8 +87,11 @@ class FakeLife:
     def rent_cents(self, period):
         return 300000
 
-    def utility_cents(self, period):
-        return 20000
+    def utility_plan(self, period):
+        return ({"key": "water", "name": "水费", "amount_cents": 1000},
+                {"key": "electric", "name": "电费", "amount_cents": 2000},
+                {"key": "gas", "name": "燃气费", "amount_cents": 3000},
+                {"key": "broadband", "name": "宽带", "amount_cents": 4000})
 
 
 class FakeTrading:

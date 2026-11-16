@@ -123,7 +123,10 @@ class FullRepo(Repo):
         self.items_rows.append((kind, label, amount))
 
     def salary_items(self, period):
-        return self.items_rows
+        # 真库返回 dict 行（kind/label/amount_cents）；以前返回元组是因为年终奖那段
+        # 一直 NameError 被吞掉，summary() 根本没被跑过。
+        return [{"kind": kind, "label": label, "amount_cents": amount}
+                for kind, label, amount in self.items_rows]
 
     def mark_settled(self, period, kind, note=""):
         return True
@@ -139,6 +142,7 @@ def test_year_end_bonus_added_on_jan_15():
     plugin.work_events = ME()
     out = asyncio.run(sal.settle(dt.datetime(2027, 1, 15, 10, 0), "2027-01"))
     assert out["ok"]
+    assert any(label == "年终奖" for _kind, label, _amount in repo.items_rows)
 
 
 class Trades:

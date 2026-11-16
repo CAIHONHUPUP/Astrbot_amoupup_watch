@@ -100,6 +100,11 @@ def configure(name=""):
     """插件启动时调用一次：设置进程时区。返回实际生效的时区名。"""
     _state["name"] = normalize(name)
     target = resolve_name(_state["name"])
+    if get_zone(target) is None:
+        # 名字写错（Asia/Shangai、GMT+8:00…）时 tzset 不抛异常（glibc 回落 UTC），
+        # 于是整个插件按 UTC 算时间却没有任何提示。这里回退默认时区（与能陪一致）。
+        target = DEFAULT_TIMEZONE
+        _state["name"] = target
     prev = os.environ.get("TZ")
     if not hasattr(_time, "tzset"):
         # Windows 等没有 tzset 的平台：把 TZ 写成 "Asia/Shanghai" 这种 IANA 名字，
@@ -113,7 +118,18 @@ def configure(name=""):
         _time.tzset()
         _applied.update({"ok": True, "name": target, "prev": prev})
     except Exception:
-        _applied.update({"ok": False, "name": target, "prev": prev})
+        # 设置失败也要把 TZ 退回去：否则进程里别的模块会按错时区算时间，
+        # 而 restore() 只在 ok=True 时才回滚，等于永远退不回来。
+        try:
+            if prev is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = str(prev)
+            if hasattr(_time, "tzset"):
+                _time.tzset()
+        except Exception:
+            pass  # cleanup: best-effort
+        _applied.update({"ok": False, "name": target, "prev": None})
     return target
 
 

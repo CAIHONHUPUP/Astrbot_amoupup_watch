@@ -152,6 +152,10 @@ class ApiMixin:
     async def _api_social(self, request=None):
         """GET 核心关系/应收；POST {action:"event", name:"随礼"} 触发一次社交事件。"""
         try:
+            try:
+                from ..services.social_engine import panel_events
+            except ImportError:
+                from services.social_engine import panel_events
             social = getattr(self, "social", None)
             if social is None:
                 try:
@@ -177,7 +181,7 @@ class ApiMixin:
                 recv = social.repo.receivables()
                 return {"ok": True, "npcs": rows, "receivables": recv,
                         "line": social.relation_line(),
-                        "events": social.events(10),
+                        "events": panel_events(social.events(10)),
                         "pending": social.pending_invite()}
             body = await self._read_json()
             if str(body.get("action") or "").lower() == "invite":
@@ -199,7 +203,7 @@ class ApiMixin:
                         "result": {"decision": (out or {}).get("decision"),
                                    "invite": (out or {}).get("invite"),
                                    "pending": social.pending_invite(),
-                                   "events": social.events(5)}}
+                                   "events": panel_events(social.events(5))}}
             name = str(body.get("name") or "随礼")
             table = {"随礼": social.gift_money, "红包": social.red_packet,
                      "聚餐": social.dinner, "借钱": social.borrow_request, "批评": social.criticism}

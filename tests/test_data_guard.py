@@ -39,6 +39,9 @@ class FakeRuntime:
     async def run_io(self, fn, *a, **k):
         raise RuntimeError("network down")
 
+    async def run_db(self, fn, *a, **k):
+        return fn(*a, **k)
+
 
 class FakeTrading:
     pass

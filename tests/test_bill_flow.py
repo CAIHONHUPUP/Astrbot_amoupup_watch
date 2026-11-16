@@ -6,10 +6,14 @@ sys.path.insert(0, ROOT)
 from services import bill_flow as bf
 
 class FakeRepo:
-    def __init__(self): self.data = {}
+    def __init__(self): self.data = {}; self.settled_rows = set()
     def meta_get(self, k, d=None): return self.data.get(k, d)
     def meta_set(self, k, v): self.data[k] = v
     def assets(self): return []
+    def settled(self, period, key): return (str(period), str(key)) in self.settled_rows
+    def mark_settled(self, period, key, payload="{}"):
+        self.settled_rows.add((str(period), str(key)))
+        return True
 
 class FakeFinance:
     def __init__(self, cash=1000000):
@@ -25,7 +29,11 @@ class FakeFinance:
 class FakeLife:
     def _has(self, kind): return False
     def rent_cents(self, period): return 300000
-    def utility_cents(self, period): return 20000
+    def utility_plan(self, period):
+        return ({"key": "water", "name": "水费", "amount_cents": 1000},
+                {"key": "electric", "name": "电费", "amount_cents": 2000},
+                {"key": "gas", "name": "燃气费", "amount_cents": 3000},
+                {"key": "broadband", "name": "宽带", "amount_cents": 4000})
 
 class FakePlugin:
     def __init__(self):
@@ -56,7 +64,8 @@ class BillFlowTests(unittest.TestCase):
         first = bf.create_due(plugin, now)
         second = bf.create_due(plugin, now)
         self.assertEqual(len(first), len(second))
-        self.assertEqual({r["kind"] for r in first}, {"rent", "utilities"})
+        self.assertEqual({r["kind"] for r in first},
+                         {"rent", "water", "electric", "gas", "broadband"})
 
     def test_pay_and_overdue(self):
         import asyncio

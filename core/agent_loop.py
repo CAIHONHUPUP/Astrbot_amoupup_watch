@@ -246,6 +246,15 @@ class FinanceDecision:
                             int(decision.get("term_months") or 0), decision.get("note"))
                 elif action == "skip_fund_trade":
                     executed = await skip_fund_trade_action(self.plugin, decision.get("reason"))
+                    # 放弃了也要说人话：像真人一样在聊天里抱怨一句，而不是在面板上冒代码名
+                    remark = str(decision.get("text") or "").strip()
+                    if remark:
+                        try:
+                            said = await send_message_to_user_action(self.plugin, remark)
+                            if said.get("ok"):
+                                executed = dict(executed, text=remark, notified=True)
+                        except Exception as exc:
+                            isolated("finance.fund_outage.skip_notify", exc)
             except Exception as exc:
                 isolated("finance.fund_outage.action", exc)
                 executed = {"ok": False, "action": action, "message": "action_failed"}

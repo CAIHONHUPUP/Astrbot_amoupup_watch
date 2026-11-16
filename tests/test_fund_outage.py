@@ -79,6 +79,12 @@ class FakeRuntime:
             return await result
         return result
 
+    async def run_db(self, fn, *args, timeout=None, **kwargs):
+        result = fn(*args, **kwargs)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
 
 def test_parse_outage_send_message():
     d = parse_outage_decision('{"action":"send_message_to_user","text":"这破软件又崩了"}')
@@ -199,3 +205,35 @@ def test_slot_outage_demo_does_not_reallocate(monkeypatch):
         dt.datetime(2026, 11, 16, 14, 50), "2026-11-16", 100000, {}, demo=True))
     assert out["executed"]["message"] == "demo_no_reallocate"
     assert called == []
+
+def test_parse_outage_skip_keeps_text():
+    d = parse_outage_decision('{"action":"skip_fund_trade","reason":"算了","text":"软件又崩了"}')
+    assert d["action"] == "skip_fund_trade"
+    assert d["text"] == "软件又崩了"
+
+
+def test_slot_outage_skip_with_text_sends_complaint(monkeypatch):
+    import core.llm_decider as decider
+    import core.fund_actions as actions
+
+    async def fake_decide(plugin, facts, mood, memory=""):
+        return {"action": "skip_fund_trade", "reason": "软件崩了，不买了",
+                "text": "老公，这破软件又崩了，今天不买了"}
+
+    sent = {}
+
+    async def fake_send(plugin, text):
+        sent["text"] = text
+        return {"ok": True, "action": "send_message_to_user", "text": text, "message": "sent"}
+
+    monkeypatch.setattr(decider, "llm_decide_outage", fake_decide)
+    monkeypatch.setattr(actions, "send_message_to_user_action", fake_send)
+    finance = FakeFinance()
+    dec = FinanceDecision(FakePlugin(), None, FakeRepo(), finance, FakeTrading())
+    out = asyncio.run(dec._slot_outage(
+        dt.datetime(2026, 11, 16, 14, 50), "2026-11-16", 100000, {}, demo=True))
+    assert out["executed"]["action"] == "skip_fund_trade"
+    assert out["executed"].get("notified") is True
+    assert sent["text"].startswith("老公")
+    assert finance.outages[-1][0]["action"] == "skip_fund_trade"
+

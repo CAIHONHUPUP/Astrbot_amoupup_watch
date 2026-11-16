@@ -21,7 +21,7 @@ try:
     from . import bill_flow
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
-    from utils.helpers import parse_day
+    from utils.helpers import stable_int, parse_day
     import services.bill_flow as bill_flow
 
 DEFAULT_BASE_CENTS = 680000          # 6800 元
@@ -280,7 +280,8 @@ class FinanceSalary:
             except Exception as exc:
                 isolated("salary.full_attendance", exc)
         try:
-            if int(pay_day.month) == 1 and int(pay_day.day) == 15:
+            # 1 月的发薪日遇周末/节假日会顺延到 15 号之后，不能只认 day == 15
+            if int(pay_day.month) == 1:
                 months = 1 + stable_int("year_end:" + str(now.year), 0, 3)
                 self.add_item(period, "bonus", "年终奖", int(self.base_cents() * months))
         except Exception as exc:

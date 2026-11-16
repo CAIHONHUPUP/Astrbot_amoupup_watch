@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import time as _time
 
 try:
     from ..guard import isolated
@@ -125,7 +126,10 @@ def bill_plan(plugin, period):
         except Exception as exc:
             isolated("bill_flow.bill_plan.2", exc)
         try:
-            rows.append({"kind": "utilities", "name": "水电燃气宽带", "amount_cents": int(life.utility_cents(period))})
+            for item in life.utility_plan(period):
+                rows.append({"kind": str(item.get("key") or ""),
+                             "name": str(item.get("name") or ""),
+                             "amount_cents": int(item.get("amount_cents") or 0)})
         except Exception as exc:
             isolated("bill_flow.bill_plan.3", exc)
     return [row for row in rows if row["amount_cents"] > 0]  # type: ignore[operator]
@@ -135,15 +139,132 @@ def _key(period):
     return "bill:due:" + str(period)
 
 
+#: 水电燃气宽带按单项立项，每条账单只对应一个 settlements 键。
+UTILITY_KEYS = ("water", "electric", "gas", "broadband")
+SETTLE_KEYS = {"rent": ("rent",),
+               "water": ("water",),
+               "electric": ("electric",),
+               "gas": ("gas",),
+               "broadband": ("broadband",),
+               # 迁移前的旧聚合单：整张水电都算交过
+               "utilities": UTILITY_KEYS}
+#: 房贷走 loans 的 settlement（house），和自动代扣共用同一个幂等键。
+MORTGAGE_KEYS = ("house", "mortgage")
+_UTILITY_ALIASES = ("utilities", "水电", "水电费", "水电燃气", "水电燃气宽带")
+
+
+def settlement_keys(kind):
+    """一个账单 kind 对应的 settlements 键。"""
+    text = str(kind or "")
+    if text == "mortgage":
+        return MORTGAGE_KEYS
+    return SETTLE_KEYS.get(text, ())
+
+
+def already_settled(plugin, period, kind):
+    """本期这笔账是否已经自动扣过（两条入口共用的幂等判重）。"""
+    repo = _repo(plugin)
+    if repo is None:
+        return False
+    for key in settlement_keys(kind):
+        try:
+            if repo.settled(period, key):
+                return True
+        except Exception as exc:
+            isolated("bill_flow.settled", exc)
+    return False
+
+
+def wanted_kinds(kind):
+    """把「水电」「utilities」这类说法归一成一组单项 kind。"""
+    text = str(kind or "").strip()
+    if not text:
+        return ()
+    if text in _UTILITY_ALIASES:
+        return UTILITY_KEYS
+    return (text,)
+
+
+def mark_paid_settled(plugin, period, kind):
+    """账单交完后同步结算键；失败只记日志，不影响这次扣款结果。"""
+    repo = _repo(plugin)
+    if repo is None:
+        return
+    for key in SETTLE_KEYS.get(str(kind or ""), ()):
+        try:
+            repo.mark_settled(period, key, "bill_paid")
+        except Exception as exc:
+            isolated("bill_flow.mark_settled", exc)
+
+
 def load_due(plugin, period):
     repo = _repo(plugin)
     try:
         raw = repo.meta_get(_key(period), [])
         if isinstance(raw, str):
             raw = json.loads(raw or "[]")
-        return list(raw or [])
+        rows = [row for row in (raw or []) if isinstance(row, dict)]
     except Exception:
         return []
+    rows = _migrate_legacy_utilities(plugin, period, rows)
+    return _reconcile_paid_rows(plugin, period, rows)
+
+
+def _migrate_legacy_utilities(plugin, period, rows):
+    """旧版把水电燃气宽带写成一张聚合单：按单项拆开，幂等、不丢老数据。"""
+    if not any(str(row.get("kind") or "") == "utilities" for row in rows):
+        return rows
+    life = getattr(plugin, "finance_life", None)
+    plan = ()
+    if life is not None and hasattr(life, "utility_plan"):
+        try:
+            plan = tuple(life.utility_plan(period))
+        except Exception as exc:
+            isolated("bill_flow.migrate_plan", exc)
+            plan = ()
+    by_key = {str(item.get("key") or ""): item for item in plan if isinstance(item, dict)}
+    if not by_key:
+        return rows  # 没有生活模块：保留旧聚合行，别把欠款丢掉
+    repo = _repo(plugin)
+    out = []
+    for row in rows:
+        if str(row.get("kind") or "") != "utilities":
+            out.append(row)
+            continue
+        if str(row.get("status") or "") == "paid":
+            # 旧聚合单已经交过钱：四项都记成已交，避免自动代扣再收一遍
+            for key in UTILITY_KEYS:
+                try:
+                    repo.mark_settled(period, key, "legacy_bill_paid")
+                except Exception as exc:
+                    isolated("bill_flow.migrate_settled", exc)
+            continue
+        for key in UTILITY_KEYS:
+            if already_settled(plugin, period, key):
+                continue
+            item = by_key.get(key) or {}
+            out.append({"kind": key, "name": str(item.get("name") or key),
+                        "amount_cents": int(item.get("amount_cents") or 0),
+                        "created_ts": row.get("created_ts"),
+                        "status": "due", "penalty": int(row.get("penalty") or 0)})
+    save_due(plugin, period, out)
+    return out
+
+
+def _reconcile_paid_rows(plugin, period, rows):
+    """已经自动扣过的账不能再当成欠费：按 settlements 收回状态，防止二次扣款。"""
+    changed = False
+    for row in rows:
+        if str(row.get("status") or "") != "due":
+            continue
+        if already_settled(plugin, period, row.get("kind")):
+            row["status"] = "paid"
+            row["payer"] = "auto"
+            row["paid_ts"] = row.get("paid_ts") or _time.time()
+            changed = True
+    if changed:
+        save_due(plugin, period, rows)
+    return rows
 
 
 def save_due(plugin, period, rows):
@@ -277,14 +398,34 @@ async def force_settle(plugin, rows, period, now):
     if balance < need:
         raised += await _raise_from_stocks(plugin, need - balance, period, now)
     paid = 0
+    touched = 0
     for row in pending:
+        kind = str(row.get("kind") or "")
+        if already_settled(plugin, period, kind):
+            # 自动代扣已经交过这一项：只把账单行收口，绝不再扣一次
+            row["status"] = "paid"
+            row["paid_ts"] = now.timestamp()
+            row["payer"] = "auto"
+            touched += 1
+            continue
+        if kind == "mortgage":
+            # 房贷和自动代扣共用 settle_loan：同一幂等键、同一次本金摊销
+            out = await _settle_mortgage(plugin, now, period)
+            if str((out or {}).get("status") or "") != "paid":
+                break
+            row["status"] = "paid"
+            row["paid_ts"] = now.timestamp()
+            row["payer"] = "auto"
+            paid += 1
+            touched += 1
+            continue
         amount = int(row.get("amount_cents") or 0)
         if int(finance.balance_cents() or 0) < amount:
             break
         try:
             result = await finance.expense(
                 amount, str(row.get("name")),
-                "bill:auto:%s:%s" % (period, row.get("kind")), necessary=True)
+                "bill:auto:%s:%s" % (period, kind), necessary=True)
         except Exception:
             break
         if not isinstance(result, dict) or not result.get("ok"):
@@ -292,9 +433,12 @@ async def force_settle(plugin, rows, period, now):
         row["status"] = "paid"
         row["paid_ts"] = now.timestamp()
         row["payer"] = "auto"
+        mark_paid_settled(plugin, period, kind)
         paid += 1
-    if paid:
+        touched += 1
+    if touched:
         save_due(plugin, period, rows)
+    if paid:
         try:
             finance.small_diary("银行自动处置了定期/股票，替我交了账单，心里空落落的。")
             await finance.permanent_memory(
@@ -315,23 +459,11 @@ def create_due(plugin, now=None):
     rows = load_due(plugin, period)
     if rows:
         return rows
-    repo = _repo(plugin)
-
-    def _settled(key):
-        try:
-            return bool(repo.settled(period, key))
-        except Exception:
-            return False
-
     rows = []
     for row in bill_plan(plugin, period):
         kind = str(row.get("kind") or "")
-        if kind == "rent" and _settled("rent"):
-            continue
-        if kind == "utilities" and any(_settled(k) for k in ("water", "electric", "gas", "broadband")):
-            continue
-        if kind == "mortgage" and (_settled("mortgage") or _settled("house")):
-            continue
+        if kind and already_settled(plugin, period, kind):
+            continue  # 任何一项已经交过（自动代扣/手动），都不再重复立项
         item = dict(row)
         item.update({"created_ts": now.timestamp(), "status": "due", "penalty": 0})
         rows.append(item)
@@ -355,6 +487,18 @@ def stage_of(rows, now_ts_value):
     return stage
 
 
+async def _settle_mortgage(plugin, now, period):
+    """房贷代缴入口：复用 loans 的结算（同一幂等键 + 本金摊销），绝不只扣钱。"""
+    prop = getattr(plugin, "finance_property", None)
+    if prop is None or not hasattr(prop, "settle_loan"):
+        return {"ok": False, "status": "unavailable"}
+    try:
+        return await prop.settle_loan("house", now, period)
+    except Exception as exc:
+        isolated("bill_flow.mortgage", exc)
+        return {"ok": False, "status": "error"}
+
+
 async def pay(plugin, kind="", now=None, payer="her"):
     now = now or _dt.datetime.now()
     period = now.strftime("%Y-%m")
@@ -365,33 +509,76 @@ async def pay(plugin, kind="", now=None, payer="her"):
     if not is_workday(now.date(), holiday_set) or int(now.hour) < 9:
         return {"ok": False, "message": "今天休息，银行不办理，等下一个工作日再交吧。"}
     rows = load_due(plugin, period)
+    wanted = wanted_kinds(kind)
     target = None
     for row in rows:
-        if row.get("status") == "due" and (not kind or kind in (row.get("kind"), row.get("name"))):
+        if row.get("status") != "due":
+            continue
+        row_kind = str(row.get("kind") or "")
+        if not wanted or row_kind in wanted or str(row.get("name") or "") == str(kind or ""):
             target = row
             break
     if target is None:
+        for row in rows:
+            row_kind = str(row.get("kind") or "")
+            if row.get("status") == "paid" and (
+                    (wanted and row_kind in wanted) or str(row.get("name") or "") == str(kind or "")):
+                return {"ok": False, "already_settled": True,
+                        "message": "这笔账单已经交过了（自动代扣或手动），不用再交一遍。"}
         return {"ok": False, "message": "这个月没有要交的这笔账呀。"}
+    bill_kind = str(target.get("kind") or "")
+    if bill_kind == "mortgage":
+        out = await _settle_mortgage(plugin, now, period)
+        status = str((out or {}).get("status") or "")
+        if status == "paid":
+            target["status"] = "paid"
+            target["paid_ts"] = now.timestamp()
+            target["payer"] = payer
+            save_due(plugin, period, rows)
+            if not unpaid(rows):
+                clear_freeze(plugin)
+            return {"ok": True, "message": "交上了：房贷 %.2f 元（本金 %.2f，利息 %.2f）" % (
+                int(out.get("amount") or 0) / 100.0, int(out.get("principal") or 0) / 100.0,
+                int(out.get("interest") or 0) / 100.0)}
+        if status == "settled":
+            target["status"] = "paid"
+            target["paid_ts"] = now.timestamp()
+            target["payer"] = "auto"
+            save_due(plugin, period, rows)
+            if not unpaid(rows):
+                clear_freeze(plugin)
+            return {"ok": False, "already_settled": True,
+                    "message": "这个月的房贷已经自动扣过了，不用手动交。"}
+        return {"ok": False, "message": "钱不够，房贷没交上。"}
     finance = _finance(plugin)
     if finance is None:
         return {"ok": False, "message": "账本没连上。"}
+    if already_settled(plugin, period, bill_kind):
+        target["status"] = "paid"
+        target["paid_ts"] = now.timestamp()
+        target["payer"] = "auto"
+        save_due(plugin, period, rows)
+        return {"ok": False, "already_settled": True,
+                "message": "%s 已经自动扣过了，不用手动交。" % (target.get("name") or "这笔账")}
     amount = int(target.get("amount_cents") or 0)
     if int(getattr(finance, "balance_cents", lambda: 0)() or 0) < amount:
         return {"ok": False, "message": "钱不够，交不上。"}
-    result = await finance.expense(amount, str(target.get("name")), "bill:%s:%s" % (period, target.get("kind")), necessary=True)
+    result = await finance.expense(amount, str(target.get("name")),
+                                    "bill:%s:%s" % (period, bill_kind), necessary=True)
     if not isinstance(result, dict) or not result.get("ok"):
         return {"ok": False, "message": "扣款失败。"}
     target["status"] = "paid"
     target["paid_ts"] = now.timestamp()
     target["payer"] = payer
     save_due(plugin, period, rows)
+    mark_paid_settled(plugin, period, bill_kind)
     if not unpaid(rows):
         clear_freeze(plugin)
     thanks = "老公帮我交的" if payer == "husband" else "我自己交的"
     try:
         await finance.permanent_memory("%s 交了 %s 元%s，%s。" % (
             now.strftime("%Y-%m-%d"), amount / 100.0, target.get("name"), thanks),
-            "bill:paid:%s:%s:mem" % (period, target.get("kind")))
+            "bill:paid:%s:%s:mem" % (period, bill_kind))
     except Exception as exc:
         isolated("bill_flow.pay", exc)
     try:

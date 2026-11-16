@@ -708,13 +708,8 @@ class FinanceLink:
         fact = dict(fact or {})
         day = str(fact.get("day") or time.strftime("%Y-%m-%d"))
         idem = str(idem or ("fund_outage:%s:%d" % (day, int(time.time() * 1000))))
-        try:
-            repo = getattr(self.plugin, "finance_repo", None)
-            if repo is not None:
-                repo.add_event("fund_outage", status=str(fact.get("action") or ""),
-                               extra=fact, day=day, idem=idem)
-        except Exception as exc:
-            isolated("finance.fund_outage.event", exc)
+        # 2026-11-16：基金决策绝不写进社交动态表（skip_fund_trade 曾漏到「最近关系动态」）。
+        # 只留短记忆 + 日记，面板不展示任何基金流水。
         payload = json.dumps(fact, ensure_ascii=False, sort_keys=True)
         ok = False
         try:

@@ -84,6 +84,22 @@ class FundMarket:
         except Exception as exc:
             isolated("finance.fund.positions", exc)
 
+    def _persist_quotes(self, day, quotes, codes, flag_key):
+        """落盘：行情 / 持仓 / 观察池 / 元数据 / 刷新标记（由 DB 线程执行）。"""
+        self._save(day, quotes)
+        self._update_positions(quotes)
+        try:
+            self._pool().observe(quotes, day)
+        except Exception as exc:
+            isolated("finance.fund.observe", exc)
+        try:
+            self.repo.meta_set("fund_quotes", json.dumps(quotes, ensure_ascii=False))
+        except Exception as exc:
+            isolated("finance.fund.meta", exc)
+        tradeable = sum(1 for q in quotes.values() if q.get("tradeable"))
+        self.repo.meta_set(flag_key, "ok:%d/%d/tradeable=%d" % (len(quotes), len(codes), tradeable))
+        return tradeable
+
     async def refresh(self, now=None, force=False):
         now = now or _dt.datetime.now()
         day = now.date().isoformat()
@@ -95,10 +111,15 @@ class FundMarket:
         if not force and minutes >= CLOSE_MINUTE:
             return {"ok": True, "skipped": "after_close", "day": day}
         flag_key = "fund_refresh:" + day
-        done = str(self.repo.meta_get(flag_key, "") or "")
-        if done and not force:
-            return {"ok": True, "skipped": "done", "day": day, "flag": done}
-        codes = self._codes(day)
+        # 14:50 这次 refresh 全程不能卡事件循环：sqlite 读写一律丢给 DB 线程
+        try:
+            done = str(await self.runtime.run_db(self.repo.meta_get, flag_key, "", timeout=5) or "")
+            if done and not force:
+                return {"ok": True, "skipped": "done", "day": day, "flag": done}
+            codes = await self.runtime.run_db(self._codes, day, timeout=5)
+        except Exception as exc:
+            isolated("finance.fund.meta_read", exc)
+            return {"ok": False, "skipped": "db_error", "day": day}
         if not codes:
             return {"ok": False, "skipped": "empty_pool", "day": day}
         try:
@@ -107,24 +128,25 @@ class FundMarket:
             isolated("finance.fund.fetch", exc)
             quotes = {}
         if quotes:
-            self._save(day, quotes)
-            self._update_positions(quotes)
             try:
-                self._pool().observe(quotes, day)
+                tradeable = await self.runtime.run_db(
+                    self._persist_quotes, day, quotes, codes, flag_key, timeout=10)
             except Exception as exc:
-                isolated("finance.fund.observe", exc)
-            try:
-                self.repo.meta_set("fund_quotes", json.dumps(quotes, ensure_ascii=False))
-            except Exception as exc:
-                isolated("finance.fund.meta", exc)
-            tradeable = sum(1 for q in quotes.values() if q.get("tradeable"))
-            self.repo.meta_set(flag_key, "ok:%d/%d/tradeable=%d" % (len(quotes), len(codes), tradeable))
+                isolated("finance.fund.persist", exc)
+                return {"ok": False, "skipped": "db_error", "day": day, "quotes": len(quotes)}
             return {"ok": True, "day": day, "quotes": len(quotes), "codes": len(codes),
-                    "tradeable": tradeable}
-        tries = int(self.repo.meta_get("fund_refresh_try:" + day, 0) or 0) + 1
-        self.repo.meta_set("fund_refresh_try:" + day, tries)
-        if tries >= MAX_TRIES or minutes >= CLOSE_MINUTE:
-            self.repo.meta_set(flag_key, "failed:%d" % tries)
+                    "tradeable": int(tradeable or 0)}
+        tries = 0
+        try:
+            tries = int(await self.runtime.run_db(
+                self.repo.meta_get, "fund_refresh_try:" + day, 0, timeout=5) or 0) + 1
+            await self.runtime.run_db(self.repo.meta_set, "fund_refresh_try:" + day,
+                                      tries, timeout=5)
+            if tries >= MAX_TRIES or minutes >= CLOSE_MINUTE:
+                await self.runtime.run_db(self.repo.meta_set, flag_key,
+                                          "failed:%d" % tries, timeout=5)
+        except Exception as exc:
+            isolated("finance.fund.retry_meta", exc)
         return {"ok": False, "skipped": "no_quotes", "day": day, "tries": tries}
 
     def latest(self, day=None):
@@ -145,11 +167,16 @@ class FundMarket:
             raw = self.repo.meta_get("fund_quotes")
             if raw:
                 data = json.loads(raw) if isinstance(raw, str) else raw
+                day_text = str(day or "")
                 for code, item in (data or {}).items():
                     if isinstance(item, dict):
                         item = dict(item)
                         item.setdefault("code", str(code))
-                        item["tradeable"] = bool(item.get("tradeable"))
+                        # 旧 meta 只是「上一次成功刷新」的快照：日期不是今天就不能当今日估值，
+                        # 否则今天没拉到行情也会拿昨天的净值当 tradeable 去下单。
+                        fresh = bool(day_text) and str(item.get("time") or "").startswith(day_text)
+                        item["tradeable"] = bool(item.get("tradeable")) and fresh
+                        item["stale"] = not item["tradeable"]
                         out[str(code)] = item
         except Exception as exc:
             isolated("finance.fund.legacy", exc)

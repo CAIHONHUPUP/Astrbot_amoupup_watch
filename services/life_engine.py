@@ -22,7 +22,6 @@ from .city import current_city, factor_of
 DEFAULT_SALARY_CENTS = 680000          # 6800 元
 MIN_SALARY_CENTS, MAX_SALARY_CENTS = 300000, 2000000
 RENT_RANGE = (80000, 250000)           # 800–2500 元
-UTILITY_RANGE = (10000, 80000)         # 100–800 元
 
 
 def _hash_int(text, low, high):
@@ -57,9 +56,6 @@ class FinanceLife:
         base = base_rent_cents(city)
         jitter = 0.90 + _hash_int("rent-jitter:" + str(period), 0, 21) / 100.0
         return int(round(base * jitter))
-
-    def utility_cents(self, period):
-        return _hash_int("util:" + str(period), *UTILITY_RANGE)
 
     def total_assets_cents(self):
         cash = self.finance.balance_cents() or 0
@@ -329,6 +325,26 @@ class FinanceLife:
         self.repo.mark_settled(period, "rent", str(amount))
         return "ok"
 
+    def utility_plan(self, period, month=None):
+        """本期水/电/燃气/宽带逐项金额；账单和自动结算共用同一口径，别再各算一套。"""
+        try:
+            month = int(month if month is not None else str(period).split("-")[-1])
+        except Exception:
+            month = 1
+        summer = month in (6, 7, 8, 9)
+        factor = factor_of(current_city(getattr(self, "plugin", None)))
+        return (
+            {"key": "water", "name": "水费",
+             "amount_cents": int(round(_hash_int("water:" + period, 1100, 2500) * factor))},
+            {"key": "electric", "name": "电费",
+             "amount_cents": int(round((_hash_int("electric:" + period, 15000, 22000) if summer
+                                       else _hash_int("electric:" + period, 6000, 13000)) * factor))},
+            {"key": "gas", "name": "燃气费",
+             "amount_cents": int(round(_hash_int("gas:" + period, 3000, 6000) * factor))},
+            {"key": "broadband", "name": "宽带",
+             "amount_cents": int(round(_hash_int("broadband:" + period, 5000, 8000) * factor))},
+        )
+
     async def _utilities(self, now, period):
         """水 / 电 / 燃气 / 宽带 逐项扣；任何一项失败就停在那项，先预警再进 5% 流程。"""
         if self._bill_deferred(now):
@@ -336,15 +352,8 @@ class FinanceLife:
         cfg = getattr(getattr(self, "plugin", None), "cfg_bool", None)
         if callable(cfg) and not cfg("bill_autopay", True):
             return "bill_deferred"
-        summer = now.month in (6, 7, 8, 9)
-        factor = factor_of(current_city(getattr(self, "plugin", None)))
-        plan = (
-            ("water", "水费", int(round(_hash_int("water:" + period, 1100, 2500) * factor))),
-            ("electric", "电费", int(round((_hash_int("electric:" + period, 15000, 22000) if summer
-                                             else _hash_int("electric:" + period, 6000, 13000)) * factor))),
-            ("gas", "燃气费", int(round(_hash_int("gas:" + period, 3000, 6000) * factor))),
-            ("broadband", "宽带", int(round(_hash_int("broadband:" + period, 5000, 8000) * factor))),
-        )
+        plan = [(item["key"], item["name"], int(item["amount_cents"]))
+                for item in self.utility_plan(period, now.month)]
         for key, name, amount in plan:
             if self.repo.settled(period, key):
                 continue
