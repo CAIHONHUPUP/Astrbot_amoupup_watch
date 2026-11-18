@@ -34,6 +34,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+          pip install pillow
 
       # 版本一致性：有 tools/check_version.py 的仓库必跑，没有的明确跳过。
       - name: Version sync (if present)
