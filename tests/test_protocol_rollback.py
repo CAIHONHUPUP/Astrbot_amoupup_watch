@@ -118,6 +118,10 @@ class ProtocolTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         cfg = module.PROVIDERS["Astrbot_amoupup_forever"]
+        # GitHub 只 checkout 当前仓库：兄弟仓库不在时 build_snapshot 只能是 {}，
+        # 这条反向验证跑不了（不是回归），按和 test_test_infra 一样的口径 skip。
+        if not os.path.isdir(os.path.join(module.PLUGINS_DIR, "Astrbot_amoupup_forever")):
+            self.skipTest("缺少同级插件仓库 Astrbot_amoupup_forever（GitHub 只 checkout 当前仓库）")
         built = module.build_snapshot("Astrbot_amoupup_forever", cfg)
         self.assertIn("protocol_info", built)
         broken = dict(built)
