@@ -6,6 +6,7 @@
 - 成功才写长期层并把原流水标记 archived（不物理删除）。
 """
 from __future__ import annotations
+from typing import Any
 
 import asyncio
 import datetime as _dt
@@ -134,7 +135,7 @@ async def nightly_tick(plugin, now=None):
             repo.meta_set("nightly_memory_day", day)
         return {"ok": True, "reason": "empty", "written": 0, "archived": 0}
 
-    groups = {}  # type: ignore[var-annotated]
+    groups: dict[Any, Any] = {}
     for row in rows:
         key = (str(row.get("bot_id") or ""), str(row.get("uid") or ""),
                str(row.get("scope") or "private"), str(row.get("group_id") or ""),

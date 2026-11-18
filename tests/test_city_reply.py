@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from services.city import city_reply
 
-
-class FakePlugin:
-    config = {}
-
+from plugin_fakes import CityReplyFakePlugin as FakePlugin  # noqa: E402
 
 def test_city_reply_pending_fee_uses_yuan():
     moved = {"moved": {"weather": {"name": "杭州"}}, "fee_cents": 120000, "pending_cents": 120000}
@@ -15,7 +12,6 @@ def test_city_reply_pending_fee_uses_yuan():
     assert "搬家费" in text
     assert "¥1200.00" in text
     assert "[转账]1200.00" in text
-
 
 def test_city_reply_paid_fee_uses_yuan():
     moved = {"moved": {}, "fee_cents": 50000, "pending_cents": 0}

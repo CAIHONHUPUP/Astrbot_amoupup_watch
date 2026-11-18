@@ -13,8 +13,10 @@ except ImportError:  # 离线测试 / 顶层加载
 
 try:
     from ..utils.helpers import HOLIDAYS_2026
+    from ..utils.money import bill_idem, fmt_amount, idem
 except ImportError:  # 离线测试 / 顶层加载
     from utils.helpers import HOLIDAYS_2026
+    from utils.money import bill_idem, fmt_amount, idem
 
 PENALTY_RATE = 0.05
 STAGE_HOURS = (24, 72, 168)
@@ -132,7 +134,7 @@ def bill_plan(plugin, period):
                              "amount_cents": int(item.get("amount_cents") or 0)})
         except Exception as exc:
             isolated("bill_flow.bill_plan.3", exc)
-    return [row for row in rows if row["amount_cents"] > 0]  # type: ignore[operator]
+    return [row for row in rows if row["amount_cents"] > 0]
 
 
 def _key(period):
@@ -195,6 +197,41 @@ def mark_paid_settled(plugin, period, kind):
             repo.mark_settled(period, key, "bill_paid")
         except Exception as exc:
             isolated("bill_flow.mark_settled", exc)
+
+
+def _charged_already(plugin, period, name, amount, account="cash"):
+    """同一期同一项是否已经在流水里扣过（哪怕幂等键不同）。
+
+    只读 wallet.ledger：用于「自动代扣已经扣了、结算键丢了，主入口又扣一次」这种
+    重试/双入口重复扣。命中就只收口、绝不再动钱。
+    """
+    finance = _finance(plugin)
+    reader = getattr(finance, "ledger", None)
+    if not callable(reader) or int(amount or 0) <= 0:
+        return False
+    try:
+        rows = list(reader(300) or [])
+    except Exception as exc:
+        isolated("bill_flow.ledger", exc)
+        return False
+    label = str(name or "")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("account") or "cash") != str(account):
+            continue
+        if str(row.get("reason") or "") != label:
+            continue
+        try:
+            if int(row.get("delta_cents") or 0) != -int(amount):
+                continue
+            ts = float(row.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if ts and _dt.datetime.fromtimestamp(ts).strftime("%Y-%m") != str(period):
+            continue
+        return True
+    return False
 
 
 def load_due(plugin, period):
@@ -375,7 +412,7 @@ async def _raise_from_stocks(plugin, need_cents, period, now):
             continue
         try:
             out = await trading.sell(str(pos.get("code") or ""), qty, price_cents / 100.0,
-                                     idem="bill:auto-sell:%s:%s" % (period, pos.get("code")))
+                                     idem=idem("bill:auto-sell", period, pos.get("code")))
         except Exception:
             continue
         if out and out.get("ok"):
@@ -425,7 +462,7 @@ async def force_settle(plugin, rows, period, now):
         try:
             result = await finance.expense(
                 amount, str(row.get("name")),
-                "bill:auto:%s:%s" % (period, kind), necessary=True)
+                idem("bill:auto", period, kind), necessary=True)
         except Exception:
             break
         if not isinstance(result, dict) or not result.get("ok"):
@@ -443,7 +480,7 @@ async def force_settle(plugin, rows, period, now):
             finance.small_diary("银行自动处置了定期/股票，替我交了账单，心里空落落的。")
             await finance.permanent_memory(
                 "逾期 3 天，银行自动处置资产交了 %d 笔账单。" % paid,
-                "bill:auto:%s:mem" % period)
+                idem("bill:auto", period, "mem"))
         except Exception as exc:
             isolated("bill_flow.force_settle", exc)
     return {"paid": paid, "raised": raised}
@@ -537,9 +574,9 @@ async def pay(plugin, kind="", now=None, payer="her"):
             save_due(plugin, period, rows)
             if not unpaid(rows):
                 clear_freeze(plugin)
-            return {"ok": True, "message": "交上了：房贷 %.2f 元（本金 %.2f，利息 %.2f）" % (
-                int(out.get("amount") or 0) / 100.0, int(out.get("principal") or 0) / 100.0,
-                int(out.get("interest") or 0) / 100.0)}
+            return {"ok": True, "message": "交上了：房贷 %s 元（本金 %s，利息 %s）" % (
+                fmt_amount(int(out.get("amount") or 0)), fmt_amount(int(out.get("principal") or 0)),
+                fmt_amount(int(out.get("interest") or 0)))}
         if status == "settled":
             target["status"] = "paid"
             target["paid_ts"] = now.timestamp()
@@ -563,8 +600,18 @@ async def pay(plugin, kind="", now=None, payer="her"):
     amount = int(target.get("amount_cents") or 0)
     if int(getattr(finance, "balance_cents", lambda: 0)() or 0) < amount:
         return {"ok": False, "message": "钱不够，交不上。"}
+    if _charged_already(plugin, period, target.get("name"), amount):
+        # 自动代扣/手动交这两个入口历史上一度各用一套幂等键：钱包不会认重，
+        # 重试就会真扣第二遍。先按流水对一次账，命中也只收口不动钱。
+        target["status"] = "paid"
+        target["paid_ts"] = now.timestamp()
+        target["payer"] = "auto"
+        save_due(plugin, period, rows)
+        mark_paid_settled(plugin, period, bill_kind)
+        return {"ok": False, "already_settled": True,
+                "message": "%s 这个月已经扣过了，不用再交。" % (target.get("name") or "这笔账")}
     result = await finance.expense(amount, str(target.get("name")),
-                                    "bill:%s:%s" % (period, bill_kind), necessary=True)
+                                    bill_idem(period, bill_kind), necessary=True)
     if not isinstance(result, dict) or not result.get("ok"):
         return {"ok": False, "message": "扣款失败。"}
     target["status"] = "paid"
@@ -577,15 +624,15 @@ async def pay(plugin, kind="", now=None, payer="her"):
     thanks = "老公帮我交的" if payer == "husband" else "我自己交的"
     try:
         await finance.permanent_memory("%s 交了 %s 元%s，%s。" % (
-            now.strftime("%Y-%m-%d"), amount / 100.0, target.get("name"), thanks),
-            "bill:paid:%s:%s:mem" % (period, bill_kind))
+            now.strftime("%Y-%m-%d"), fmt_amount(amount), target.get("name"), thanks),
+            idem("bill:paid", period, bill_kind, "mem"))
     except Exception as exc:
         isolated("bill_flow.pay", exc)
     try:
         finance.small_diary("今天交了%s，钱包又空了，%s。" % (target.get("name"), "谢谢老公救急" if payer == "husband" else "心疼"))
     except Exception as exc:
         isolated("bill_flow.pay.2", exc)
-    return {"ok": True, "message": "交上了：%s %s 元" % (target.get("name"), amount / 100.0)}
+    return {"ok": True, "message": "交上了：%s %s 元" % (target.get("name"), fmt_amount(amount))}
 
 
 async def overdue_tick(plugin, now=None):
@@ -610,16 +657,16 @@ async def overdue_tick(plugin, now=None):
                 continue
             try:
                 paid = await finance.expense(fee, "%s滞纳金" % row.get("name"),
-                                             "bill:penalty:%s:%s" % (period, row.get("kind")), necessary=True)
+                                             idem("bill:penalty", period, row.get("kind")), necessary=True)
                 if not (isinstance(paid, dict) and paid.get("ok")):
                     # 余额不够时 expense 返回 ok=False；这时不能回写 penalty，
                     # 否则下一轮直接 continue，账没扣、记忆却说扣了，永远补不回来。
                     continue
                 row["penalty"] = fee
-                finance.nudge_mood({"委屈": 30, "郁闷": 25, "开心": -25}, "bill:overdue:%s" % period)
+                finance.nudge_mood({"委屈": 30, "郁闷": 25, "开心": -25}, idem("bill:overdue", period))
                 await finance.permanent_memory(
-                    "因为没交%s逾期了，被银行扣了 %s 元滞纳金，天哪我好没用。" % (row.get("name"), fee / 100.0),
-                    "bill:overdue:%s:%s:mem" % (period, row.get("kind")))
+                    "因为没交%s逾期了，被银行扣了 %s 元滞纳金，天哪我好没用。" % (row.get("name"), fmt_amount(fee)),
+                    idem("bill:overdue", period, row.get("kind"), "mem"))
                 finance.small_diary("忘了交%s，被扣了滞纳金，呜呜。" % row.get("name"))
             except Exception as exc:
                 isolated("bill.penalty", exc)
@@ -635,7 +682,7 @@ async def overdue_tick(plugin, now=None):
         save_due(plugin, period, rows)
         if finance is not None and pending:
             try:
-                finance.nudge_mood({"焦虑": 20, "郁闷": 15}, "bill:forced:%s" % period)
+                finance.nudge_mood({"焦虑": 20, "郁闷": 15}, idem("bill:forced", period))
                 if not settled.get("paid"):
                     finance.small_diary("银行催我处置资产补账单，我不敢看账户了。")
             except Exception as exc:
@@ -647,7 +694,7 @@ async def overdue_tick(plugin, now=None):
             if fee and not row.get("final_fee"):
                 try:
                     paid = await finance.expense(fee, "%s最终违约金" % row.get("name"),
-                                                 "bill:final:%s:%s" % (period, row.get("kind")), necessary=True)
+                                                 idem("bill:final", period, row.get("kind")), necessary=True)
                     if isinstance(paid, dict) and paid.get("ok"):
                         row["final_fee"] = True
                 except Exception as exc:
@@ -657,7 +704,7 @@ async def overdue_tick(plugin, now=None):
             freeze_assets(plugin, period, rows, now)
         save_due(plugin, period, rows)
         try:
-            finance.nudge_mood({"委屈": 50, "郁闷": 40, "开心": -40, "焦虑": 30}, "bill:final:%s" % period)
+            finance.nudge_mood({"委屈": 50, "郁闷": 40, "开心": -40, "焦虑": 30}, idem("bill:final", period))
             finance.small_diary("银行把我的账户冻结了，定期和股票都动不了……")
         except Exception as exc:
             isolated("bill_flow.overdue_tick.2", exc)
@@ -693,5 +740,5 @@ def survival_line(plugin):
     except Exception:
         return ""
     if balance < 50000:
-        return "你刚交完大额账单，现在只剩 %.2f 元，接下来几天除了吃饭不能买非必需品。" % (balance / 100.0)
+        return "你刚交完大额账单，现在只剩 %s 元，接下来几天除了吃饭不能买非必需品。" % fmt_amount(balance)
     return ""

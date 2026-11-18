@@ -9,69 +9,29 @@ import re
 
 try:  # 包模式优先
     from ..guard import isolated
+    from ..core.amo_bridge import AmoBridge
 except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
+    from core.amo_bridge import AmoBridge
 
-CANCEL_WORDS = ("去不了", "去不成", "不去了", "取消约会", "放鸽子", "临时加班", "改天吧")
-ARRIVAL_WORDS = ("好", "行", "嗯", "到了", "来了", "来啦", "马上到", "等我", "出发了",
-                 "在路上了", "在路上", "到楼下", "到门口", "ok", "OK")
-INTERRUPT_WORDS = ("老板叫我", "老板叫", "领导叫", "加班", "得走了", "得回去", "先走了",
-                   "临时有事", "公司有事", "走不开", "对不起", "改天")
-#: 2026-11-15：同居设定——约会收尾是「一起回家」，不是分别/送别。
-#: 「我走了 / 分开吧 / 各回各家」这类各奔东西的话不再触发收尾。
-END_WORDS = ("吃好了", "吃完了", "吃饱了", "吃饱喝足", "结账吧", "我们回家", "回家吧",
-             "该回家了", "一起回家", "走回家", "太晚了", "回去休息", "不早了")
+from .date_rules import (AGREE_EXACT, CANCEL_WORDS, GENERIC_YES, PAUSE_MAX_MINUTES,
+                         base_cost, clock_minutes, compact, human_day_period, human_when,
+                         is_agreement, is_arrival, is_date_end, is_date_pause,
+                         is_date_resume, is_interrupt, meeting_period, minutes,
+                         parse_when, pay_mode, pick_pending, schedule_conflict,
+                         truncate_finished_blocks)
 
-def _compact(text):
-    return re.sub(r"[\s，。！？!?、~～…,.]+", "", str(text or ""))
-
-GENERIC_YES = ("好", "行", "嗯", "ok", "OK", "好的", "好呀", "好滴")
-
-def is_arrival(text):
-    """等待赴约时，极短肯定词直接视为“他到了”。"""
-    body = _compact(text)
-    if not body or len(body) > 10:
-        return False
-    if body in GENERIC_YES:
-        return True
-    return any(word in body for word in ARRIVAL_WORDS if word not in GENERIC_YES)
-
-def is_interrupt(text):
-    body = str(text or "")
-    return any(word in body for word in INTERRUPT_WORDS) and any(
-        word in body for word in ("走", "加班", "回去", "有事", "对不起"))
-
-#: 2026-11-15：约会中途短暂离开（洗手间/接电话）绝不能算结束
-PAUSE_WORDS = ("洗手间", "去个厕所", "上个厕所", "接个电话", "接电话", "去趟卫生间",
-               "去个卫生间", "买包烟", "买个东西马上")
-RESUME_WORDS = ("我回来了", "回来了", "回来啦", "我好了", "久等了")
-PAUSE_MAX_MINUTES = 15
-
-
-def is_date_end(text):
-    body = str(text or "")
-    return any(word in body for word in END_WORDS)
-
-
-def is_date_pause(text):
-    """中途离开一会儿：不算结束。"""
-    body = str(text or "")
-    if is_date_end(body):
-        return False
-    return any(word in body for word in PAUSE_WORDS)
-
-
-def is_date_resume(text):
-    body = str(text or "")
-    return any(word in body for word in RESUME_WORDS)
-
-
-def _minutes(hhmm, default=0):
-    try:
-        hour, minute = str(hhmm or "").split(":")[:2]
-        return int(hour) * 60 + int(minute)
-    except Exception:
-        return int(default)
+# 纯规则在 services/date_rules.py；这里保留旧名，老代码/测试继续可用。
+_compact = compact
+_parse_when = parse_when
+_human_when = human_when
+_human_day_period = human_day_period
+_minutes = minutes
+_clock_minutes = clock_minutes
+_base_cost = base_cost
+_pick_pending = pick_pending
+_AGREE_EXACT = AGREE_EXACT
+GENERIC_YES = GENERIC_YES
 
 
 def _repo(plugin):
@@ -82,9 +42,85 @@ def _finance(plugin):
     return getattr(plugin, "finance", None)
 
 
-def _amo(plugin):
-    finance = _finance(plugin)
-    return finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+def _bridge(plugin, finance=None):
+    """跨插件调用门面（Phase 14）：业务代码不再直摸 finance._amo()。"""
+    return AmoBridge(plugin, finance=finance, scope="date")
+
+
+def _amo_has(bridge, name):
+    """约会会话单一源（Phase 2）：新 amo 是否有会话 API；老 amo/测试桩没有。"""
+    return callable(getattr(bridge.resolve(), name, None))
+
+
+def _clear_ending(bridge):
+    """清掉收尾事实：优先会话 API，老 amo 回退 kv。"""
+    if _amo_has(bridge, "clear_date_ending"):
+        if bridge.call("clear_date_ending").ok:
+            return True
+    bridge.call("kv_set", "date_ending", {})
+    return False
+
+
+def _pause_session(bridge, now):
+    """他中途走开：优先会话 API，老 amo 回退 kv date_pause。"""
+    if _amo_has(bridge, "set_date_pause"):
+        if bridge.call("set_date_pause", PAUSE_MAX_MINUTES).ok:
+            return True
+    bridge.call("kv_set", "date_pause", {"at": now.timestamp(),
+                                         "until": now.timestamp() + PAUSE_MAX_MINUTES * 60})
+    return False
+
+
+def _resume_session(bridge):
+    """他回来了：优先会话 API，老 amo 回退 kv。"""
+    if _amo_has(bridge, "clear_date_pause"):
+        if bridge.call("clear_date_pause").ok:
+            return True
+    bridge.call("kv_set", "date_pause", {})
+    return False
+
+
+def _finish_session(bridge, title, reason, now):
+    """一次收尾：新 amo 走会话；老 amo 回退 set_date_now("",0)+set_date_home。"""
+    if _amo_has(bridge, "finish_date_session"):
+        result = bridge.call_compat("finish_date_session", [
+            ((title, reason, now.timestamp()), {}),
+            ((title, reason), {}),
+        ])
+        if result.ok:
+            return True
+    bridge.call("set_date_now", "", 0)
+    result = bridge.call("set_date_home", title, now.timestamp())
+    if not result.ok and isinstance(result.error, AttributeError):
+        bridge.call("set_date_separation", title, now.timestamp())
+    return False
+
+
+def _cancel_session(bridge, reason=""):
+    """约会中断：优先关会话；老 amo 回退 set_date_now("", 0)。"""
+    if _amo_has(bridge, "cancel_date_session"):
+        if bridge.call("cancel_date_session", reason).ok:
+            return True
+    bridge.call("set_date_now", "", 0)
+    return False
+
+
+def _pause_expired(bridge, now):
+    """暂停是否超时：读会话单一源；老 amo 读 kv date_pause。"""
+    if _amo_has(bridge, "date_session"):
+        result = bridge.call_compat("date_session", [((now,), {}), ((), {})])
+        digest = result.value if result.ok else {}
+        if not isinstance(digest, dict) or digest.get("phase") != "paused":
+            return False
+        # 会话还停在 paused，但暂停读数已经过期 → 走散超时
+        return not digest.get("paused")
+    pause = bridge.call("kv_get", "date_pause", {}).value or {}
+    if isinstance(pause, dict) and pause.get("at"):
+        try:
+            return now.timestamp() - float(pause.get("at") or 0) > PAUSE_MAX_MINUTES * 60
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def _load(plugin):
@@ -102,82 +138,6 @@ def _save(plugin, rows):
         _repo(plugin).meta_set("date:list", json.dumps(rows[-30:], ensure_ascii=False))
     except Exception as exc:
         isolated("date_engine._save", exc)
-
-
-def _parse_when(text, now=None):
-    """把「晚点 / 今晚 / 明天傍晚 / 18:27」解析成具体时间。
-
-    2026-11-15 用户要求：只要没说「明天」，且今天时间还允许，就必须定在今天；
-    以前「没解析出来 → 明天」「时间已过 → 明天」会把「搞完就出发」直接顺延到第二天。
-    """
-    now = now or _dt.datetime.now()
-    body = str(text or "").strip()
-    match = re.search(r"(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})", body)
-    if match:
-        return _dt.datetime(*[int(x) for x in match.groups()])  # type: ignore[arg-type]
-
-    tomorrow = any(word in body for word in ("明天", "明晚", "明早", "明日"))
-    base = now + _dt.timedelta(days=1) if tomorrow else now
-    target = None
-    match = re.search(r"(\d{1,2})[:：](\d{2})", body)
-    explicit_clock = bool(match)
-    if match:
-        hour, minute = int(match.group(1)), int(match.group(2))
-        target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    else:
-        for word, hour, minute in (
-            ("凌晨", 0, 30), ("早上", 8, 0), ("上午", 10, 0), ("中午", 12, 0),
-            ("下午", 15, 0), ("傍晚", 18, 0), ("晚上", 19, 30), ("深夜", 23, 0),
-        ):
-            if word in body:
-                target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                break
-    if target is None:
-        # 没给具体时间（晚点/搞完就出发/稍后）：说「明天」才顺延，否则就是今天 90 分钟后
-        return now + _dt.timedelta(days=1) if tomorrow else now + _dt.timedelta(minutes=90)
-    if not tomorrow and target <= now:
-        # 刚过几分钟（模型给的「现在/稍后」时间点）→ 仍算今天，顺延到 30 分钟后；
-        # 已经过了超过半小时（比如晚上说「中午」）→ 才顺延到明天同一时间。
-        if explicit_clock and (now - target) <= _dt.timedelta(minutes=30):
-            target = now + _dt.timedelta(minutes=30)
-        else:
-            target = target + _dt.timedelta(days=1)
-    return target
-
-
-def _human_when(when_dt, now=None):
-    """把时间说成人话（今晚六点半左右 / 明天傍晚六点左右），绝不输出 11-16 18:27。"""
-    now = now or _dt.datetime.now()
-    days = (when_dt.date() - now.date()).days
-    day_word = "今天" if days <= 0 else ("明天" if days == 1 else "那天")
-    hour, minute = int(when_dt.hour), int(when_dt.minute)
-    if 5 <= hour < 11:
-        period = "早上"
-    elif 11 <= hour < 13:
-        period = "中午"
-    elif 13 <= hour < 17:
-        period = "下午"
-    elif 17 <= hour < 18:
-        period = "傍晚"
-    elif 18 <= hour < 23:
-        period = "晚上"
-    else:
-        period = "夜里"
-    total = int(round((hour * 60 + minute) / 30.0) * 30) % (24 * 60)
-    hh, mm = divmod(total, 60)
-    hour_words = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六",
-                  7: "七", 8: "八", 9: "九", 10: "十", 11: "十一", 12: "十二"}
-    if hh == 0:
-        clock = "零点"
-    else:
-        display = hh if hh <= 12 else hh - 12
-        clock = hour_words.get(display, str(display)) + "点"
-    clock += "半" if mm == 30 else ("整" if mm == 0 else "多")
-    if day_word == "今天" and period in ("晚上", "夜里"):
-        return "今晚" + clock + "左右"
-    if day_word == "今天":
-        return "今天" + period + clock + "左右"
-    return day_word + period + clock + "左右"
 
 
 async def make_date(plugin, title, when="", deposit_cents=0, now=None):
@@ -246,23 +206,17 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
              "created": now.timestamp()}
     rows.append(entry)
     _save(plugin, rows)
-    amo = _amo(plugin)
-    if amo is not None:
-        try:
-            item = {"start": when_dt.strftime("%H:%M"),
-                    "end": (when_dt + _dt.timedelta(hours=2)).strftime("%H:%M"),
-                    "activity": "和老公" + title, "category": "social",
-                    "place": "外面", "zone": "restaurant"}
-            amo.state.add_schedule_item(when_dt.date().isoformat(), item,
-                                        source="date", reason="约会")
-        except Exception as exc:
-            isolated("date_engine.make_date", exc)
-        try:
-            amo.set_date_mood("你在期待和老公%s，心情很好。" % title,
-                              (when_dt + _dt.timedelta(hours=6)).timestamp())
-            amo.set_date_prep(title, when_dt.timestamp())
-        except Exception as exc:
-            isolated("date_engine.make_date.2", exc)
+    bridge = _bridge(plugin)
+    if bridge.ready:
+        item = {"start": when_dt.strftime("%H:%M"),
+                "end": (when_dt + _dt.timedelta(hours=2)).strftime("%H:%M"),
+                "activity": "和老公" + title, "category": "social",
+                "place": "外面", "zone": "restaurant"}
+        bridge.call("add_schedule_item", when_dt.date().isoformat(), item,
+                    source="date", reason="约会")
+        bridge.call("set_date_mood", "你在期待和老公%s，心情很好。" % title,
+                    (when_dt + _dt.timedelta(hours=6)).timestamp())
+        bridge.call("set_date_prep", title, when_dt.timestamp())
     finance = _finance(plugin)
     if finance is not None:
         try:
@@ -275,70 +229,26 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
             "when_text": _human_when(when_dt, now)}
 
 
-def _clock_minutes(value):
-    try:
-        hour, _, minute = str(value or "").partition(":")
-        return int(hour) * 60 + int(minute or 0)
-    except (TypeError, ValueError):
-        return None
-
-
-def _human_day_period(when_dt, now=None):
-    """「明天下午 / 今晚」这种只到时段的说法，用来跟老公商量换时间。"""
-    now = now or _dt.datetime.now()
-    days = (when_dt.date() - now.date()).days
-    day_word = "今天" if days <= 0 else ("明天" if days == 1 else "那天")
-    hour = int(when_dt.hour)
-    if 5 <= hour < 11:
-        period = "早上"
-    elif 11 <= hour < 13:
-        period = "中午"
-    elif 13 <= hour < 17:
-        period = "下午"
-    elif 17 <= hour < 18:
-        period = "傍晚"
-    elif 18 <= hour < 23:
-        period = "晚上"
-    else:
-        period = "夜里"
-    return "今晚" if (day_word == "今天" and period in ("晚上", "夜里")) else day_word + period
-
-
 def _date_conflict(plugin, when_dt):
     """约会时段撞上上班/看病/睡觉 → 返回冲突的活动，供她自然拒绝。"""
-    amo = _amo(plugin)
-    if amo is None:
+    bridge = _bridge(plugin)
+    if not bridge.ready:
         return ""
     day = when_dt.date().isoformat()
     try:
-        items = list(getattr(amo.state, "schedule", {}).get(day) or [])
+        items = list(bridge.schedule().get(day) or [])
     except Exception:
         return ""
-    start = int(when_dt.hour) * 60 + int(when_dt.minute)
-    end = start + 120
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("category") or "") in ("social", "rest"):
-            continue
-        begin, finish = _clock_minutes(item.get("start")), _clock_minutes(item.get("end"))
-        if begin is None or finish is None:
-            continue
-        if finish <= begin:
-            finish = 24 * 60
-        if begin < end and start < finish:
-            text = str(item.get("activity") or item.get("place") or "有事").strip()
-            return text[:14]
-    return ""
+    return schedule_conflict(items, when_dt)
 
 
 def _drop_date_items(plugin, rows):
     """把被替换掉的旧约会从她的日程里摘掉（只动 source=date/social 的行）。"""
-    amo = _amo(plugin)
-    if amo is None:
+    bridge = _bridge(plugin)
+    if not bridge.ready:
         return
     try:
-        schedule = getattr(amo.state, "schedule", {})
+        schedule = bridge.schedule()
         touched = False
         for row in rows:
             day = str(row.get("when") or "")[:10]
@@ -352,20 +262,9 @@ def _drop_date_items(plugin, rows):
                 schedule[day] = kept
                 touched = True
         if touched:
-            amo.db.kv_set("schedule", schedule)
+            bridge.call("kv_set", "schedule", schedule)
     except Exception as exc:
         isolated("date_engine._drop_date_items", exc)
-
-
-def _pick_pending(rows, title=""):
-    pending = [row for row in rows if row.get("status") == "pending"]
-    if not pending:
-        return None
-    text = str(title or "")
-    for row in reversed(pending):
-        if text and text in str(row.get("title") or ""):
-            return row
-    return pending[-1] if not text or len(pending) == 1 else None
 
 
 def find_pending(plugin, title=""):
@@ -437,18 +336,16 @@ async def cancel_date(plugin, title="", reason="", now=None):
                 finance.small_diary("没人陪我吃，我自己点外卖总行了吧！花了 %.2f 元。" % (comfort / 100.0))
         except Exception as exc:
             isolated("date_engine.cancel_date.4", exc)
-    amo = _amo(plugin)
-    if amo is not None:
-        try:
-            if broke:
-                amo.set_date_mood("你刚被放鸽子，又没钱，情绪崩溃，只能吃泡面。", now.timestamp() + 86400)
-            elif late:
-                amo.set_date_mood("你刚被老公放鸽子，很委屈很失落，接下来两天对他有点冷淡。",
-                                  now.timestamp() + 2 * 86400)
-            else:
-                amo.set_date_mood("老公临时去不了，你有点小失落，但还是体谅他。", now.timestamp() + 43200)
-        except Exception as exc:
-            isolated("date_engine.cancel_date.5", exc)
+    bridge = _bridge(plugin)
+    if broke:
+        bridge.call("set_date_mood", "你刚被放鸽子，又没钱，情绪崩溃，只能吃泡面。",
+                    now.timestamp() + 86400)
+    elif late:
+        bridge.call("set_date_mood", "你刚被老公放鸽子，很委屈很失落，接下来两天对他有点冷淡。",
+                    now.timestamp() + 2 * 86400)
+    else:
+        bridge.call("set_date_mood", "老公临时去不了，你有点小失落，但还是体谅他。",
+                    now.timestamp() + 43200)
     return {"ok": True, "late": late, "deposit_lost": lost, "comfort": comfort,
             "broke": broke, "message": _reply_text(target, late, lost, comfort, broke)}
 
@@ -489,26 +386,12 @@ async def maybe_compensate(plugin, text, now=None):
                         "date:comp:%s:mem" % int(row.get("cancelled_at") or 0))
                 except Exception as exc:
                     isolated("date_engine.maybe_compensate.2", exc)
-            amo = _amo(plugin)
-            if amo is not None:
-                try:
-                    amo.set_date_mood("", 0)
-                except Exception as exc:
-                    isolated("date_engine.maybe_compensate.3", exc)
+            _bridge(plugin).call("set_date_mood", "", 0)
             return {"ok": True, "message": "收到啦，看在你这么有诚意的份上，原谅你啦！"}
     return None
 
 
 ACTIVE_KEY = "date:active"
-BASE_COST = (("火锅", 30000), ("烤肉", 28000), ("电影", 12000),
-             ("游乐园", 25000), ("咖啡", 6000))
-
-
-def _base_cost(title):
-    for word, cents in BASE_COST:
-        if word in str(title or ""):
-            return cents
-    return 20000
 
 
 def _active(plugin):
@@ -554,12 +437,12 @@ async def attend_date(plugin, title="", mode="", now=None):
     finance = state["finance"]
     idem = state["idem"]
     title = state["title"]
-    amo_early = state["amo"]
+    bridge = state["bridge"]
     total = state["total"]
     dressing = await _attend_dress(finance, state["cash"], idem)
     fund = int(target.get("fund") or 0)
     pay, payer, proud = _attend_pay_mode(mode, fund, target, total)
-    failure = await _attend_bill(finance, pay, target, idem, amo_early)
+    failure = await _attend_bill(finance, pay, target, idem, bridge)
     if failure is not None:
         return failure
     end, title = _attend_mark_attended(target, now, payer, total, dressing)
@@ -568,8 +451,8 @@ async def attend_date(plugin, title="", mode="", now=None):
     _set_active(plugin, {"title": target.get("title"), "start": now.timestamp(),
                          "end": end.timestamp(), "payer": payer, "status": "dating"})
     _attend_mood(finance, idem, payer, proud, fund, total, pay, target)
-    amo = _attend_amo_mood(plugin, end)
-    await _attend_amo_schedule(amo, now, end, title, when_label, company, target)
+    bridge = _attend_amo_mood(plugin, end)
+    await _attend_amo_schedule(bridge, now, end, title, when_label, company, target)
     return {"ok": True, "meet": title, "payer": payer,
             "total": total, "dressing": dressing, "end": end.timestamp(),
             "status": "dating"}
@@ -586,18 +469,19 @@ async def _attend_open(plugin, title, now):
     idem = "date:attend:%s" % int(now.timestamp())
     title = str(target.get("title") or "约会")
     # 先把她切到「约会中」，再扣钱：否则财务日程会记在「家」，出现「在家买单」
-    amo_early = _amo(plugin)
-    if amo_early is not None:
-        try:
-            amo_early.set_date_now("老公已经到你面前了，你们现在在一起。正在%s。" % title,
-                                   now.timestamp() + 2 * 3600, since=now.timestamp())
-            amo_early.set_current_action("和老公在%s" % title, now.timestamp() + 2 * 3600,
-                                         place="外面", zone="restaurant", category="social")
-        except Exception as exc:
-            isolated("date_engine.attend_date.early", exc)
+    bridge = _bridge(plugin)
+    if bridge.ready:
+        now_line = "老公已经到你面前了，你们现在在一起。正在%s。" % title
+        until = now.timestamp() + 2 * 3600
+        bridge.call_compat("set_date_now", [
+            ((now_line, until), {"since": now.timestamp()}),
+            ((now_line, until), {}),
+        ])
+        bridge.call("set_current_action", "和老公在%s" % title, until,
+                    place="外面", zone="restaurant", category="social")
     total = _base_cost(target.get("title")) + 5000   # 基础 + 打车往返
     state = {"rows": rows, "target": target, "finance": finance, "cash": cash,
-             "idem": idem, "title": title, "amo": amo_early, "total": total}
+             "idem": idem, "title": title, "bridge": bridge, "total": total}
     return state, None
 
 
@@ -616,32 +500,19 @@ async def _attend_dress(finance, cash, idem):
 
 
 def _attend_pay_mode(mode, fund, target, total):
-    """买单模式：她请客 / AA / 火锅基金兜底，默认她买单。"""
-    kind = str(mode or "").strip().lower()
-    proud = kind in ("b", "她请客", "我请客", "富婆")
-    if proud:
-        pay, payer = total, "her"
-    elif kind in ("c", "aa"):
-        pay, payer = total // 2, "aa"
-    elif fund >= _base_cost(target.get("title")):
-        pay, payer = max(0, total - fund), "host"
-    else:
-        pay, payer = total, "her"
-    return pay, payer, proud
+    """买单模式：她请客 / AA / 火锅基金兜底，默认她买单（纯规则在 date_rules）。"""
+    return pay_mode(mode, fund, target.get("title"), total)
 
 
-async def _attend_bill(finance, pay, target, idem, amo_early):
+async def _attend_bill(finance, pay, target, idem, bridge):
     """买单：扣款失败时撤回「约会中」状态并返回失败结果；成功返回 None。"""
     if pay:
         try:
             res = await finance.expense(pay, "约会：%s" % target.get("title"), idem + ":bill", necessary=True)
             if not (isinstance(res, dict) and res.get("ok")):
-                if amo_early is not None:
-                    try:
-                        amo_early.set_date_now("", 0)
-                        amo_early.set_current_action("", 0)
-                    except Exception:
-                        pass  # cleanup: best-effort
+                if bridge is not None and bridge.ready:
+                    _cancel_session(bridge, "bill_failed")
+                    bridge.call("set_current_action", "", 0)
                 return {"ok": False, "message": "钱包不够，约会泡汤了……"}
         except Exception:
             return {"ok": False, "message": "约会结算失败"}
@@ -662,17 +533,7 @@ def _attend_mark_attended(target, now, payer, total, dressing):
 
 async def _attend_remember(finance, now, title):
     """共同记忆：按时间段的回忆文案 + 写长期记忆。"""
-    hour = int(now.hour)
-    if 5 <= hour < 11:
-        period = "早上"
-    elif 11 <= hour < 14:
-        period = "中午"
-    elif 14 <= hour < 18:
-        period = "下午"
-    elif 18 <= hour < 23:
-        period = "晚上"
-    else:
-        period = "深夜"
+    period = meeting_period(int(now.hour))
     when_label = "%s %s" % (now.strftime("%Y-%m-%d"), period)
     company = "他陪我涮了毛肚、给我夹菜" if "火锅" in title else "他全程陪着我、给我夹菜"
     memory_text = "[共同记忆] %s，我和老公一起去吃了%s，%s，我超级开心。" % (when_label, title, company)
@@ -705,75 +566,55 @@ def _attend_mood(finance, idem, payer, proud, fund, total, pay, target):
 
 def _attend_amo_mood(plugin, end):
     """约会中的情绪与饥饿：拉满饥饿，写入约会心情。"""
-    amo = _amo(plugin)
-    if amo is None:
+    bridge = _bridge(plugin)
+    if not bridge.ready:
         return None
-    try:
-        amo.add_hunger("amo", 100)
-    except Exception as exc:
-        isolated("date_engine.attend_date.3", exc)
-    try:
-        amo.set_date_mood("你现在正在和老公约会，化了妆、穿了最好看的衣服，心情激动又开心，说话要甜。",
-                          end.timestamp())
-    except Exception as exc:
-        isolated("date_engine.attend_date.4", exc)
-    return amo
+    bridge.call("add_hunger", "amo", 100)
+    bridge.call("set_date_mood",
+                "你现在正在和老公约会，化了妆、穿了最好看的衣服，心情激动又开心，说话要甜。",
+                end.timestamp())
+    return bridge
 
 
-async def _attend_amo_schedule(amo, now, end, title, when_label, company, target):
+async def _attend_amo_schedule(bridge, now, end, title, when_label, company, target):
     """日程收尾：约会中状态/事实/见面地点、随机小插曲与日程项清理。"""
-    if amo is None:
+    if bridge is None:
         return
-    try:
-        end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
-        fact = ("%s你已经和老公一起去吃了%s，%s。你们刚分别/你刚回到家；"
-                "这是已经发生的事实：你绝对不是一个人吃饭，记忆里必须有他。"
-                "老公问起时，就回忆刚才约会的细节。" % (when_label, title, company))
-        now_line = ("老公已经到你面前了，你们现在在一起。你正和老公在外面%s，"
-                    "他就站在你身边/坐在你对面，别再说自己一个人、也别问他在哪。" % title)
-        try:
-            amo.set_date_now(now_line, end.timestamp(), since=now.timestamp())
-        except TypeError:  # 老版本 amo / 测试桩没有 since
-            amo.set_date_now(now_line, end.timestamp())
-        fact = ("【绝对事实】老公已经到你面前了，你们现在在一起，正在%s。"
-                "这是已经发生的事实，接下来只聊见面的互动。" % title)
-        amo.set_date_fact(fact, end_of_day.timestamp())
-        try:
-            place = str((amo.state.current_activity() or {}).get("place") or "")
-        except Exception:
-            place = ""
-        try:
-            amo.set_date_meet(title, place)
-        except (AttributeError, TypeError):
-            pass  # cleanup: best-effort
-        amo.set_current_action("正在和老公约会", end.timestamp(),
-                               place="外面", zone="restaurant", category="social")
-    except Exception as exc:
-        isolated("date_engine.attend_date.5", exc)
-    try:
-        if random.random() < 0.3:
-            incident = random.choice(DATE_INCIDENTS)
-            amo.set_date_incident(incident, end.timestamp())
-            await amo.push_to_owner(incident)
-    except Exception as exc:
-        isolated("date_engine.attend_date.6", exc)
-    try:
-        day = now.date().isoformat()
-        item = {"start": now.strftime("%H:%M"), "end": end.strftime("%H:%M"),
-                "activity": "和老公" + title, "category": "social", "place": "外面",
-                "zone": "restaurant", "subject": "bot", "happened": True}
-        amo.state.add_schedule_item(day, item, source="date", reason="赴约")
-    except Exception as exc:
-        isolated("date_engine.attend_date.7", exc)
+    end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+    now_line = ("老公已经到你面前了，你们现在在一起。你正和老公在外面%s，"
+                "他就站在你身边/坐在你对面，别再说自己一个人、也别问他在哪。" % title)
+    bridge.call_compat("set_date_now", [
+        ((now_line, end.timestamp()), {"since": now.timestamp()}),
+        ((now_line, end.timestamp()), {}),
+    ])
+    fact = ("【绝对事实】老公已经到你面前了，你们现在在一起，正在%s。"
+            "这是已经发生的事实，接下来只聊见面的互动。" % title)
+    bridge.call("set_date_fact", fact, end_of_day.timestamp())
+    act = bridge.call("current_activity").value or {}
+    place = str(act.get("place") or "") if isinstance(act, dict) else ""
+    bridge.call("set_date_meet", title, place)
+    bridge.call("set_current_action", "正在和老公约会", end.timestamp(),
+                place="外面", zone="restaurant", category="social")
+    if random.random() < 0.3:
+        incident = random.choice(DATE_INCIDENTS)
+        bridge.call("set_date_incident", incident, end.timestamp())
+        await bridge.call_async("push_to_owner", incident)
+    day = now.date().isoformat()
+    item = {"start": now.strftime("%H:%M"), "end": end.strftime("%H:%M"),
+            "activity": "和老公" + title, "category": "social", "place": "外面",
+            "zone": "restaurant", "subject": "bot", "happened": True}
+    bridge.call("add_schedule_item", day, item, source="date", reason="赴约")
     try:
         when_dt = _dt.datetime.strptime(str(target.get("when")), "%Y-%m-%d %H:%M")
         if when_dt.date() != now.date():
             old_day = when_dt.date().isoformat()
-            items = list(amo.state.schedule.get(old_day) or amo.state.db.get_schedule(old_day) or [])
+            items = list(bridge.schedule().get(old_day) or [])
+            if not items:
+                items = list(bridge.call("get_schedule", old_day).value or [])
             kept = [row for row in items if str(row.get("activity") or "") != "和老公" + title]
             if len(kept) != len(items):
-                amo.state.commit_schedule_change(old_day, kept, old_items=items,
-                                                 source="date", reason="改到当天赴约")
+                bridge.call("commit_schedule_change", old_day, kept, old_items=items,
+                            source="date", reason="改到当天赴约")
     except Exception as exc:
         isolated("date_engine.attend_date.8", exc)
 
@@ -787,25 +628,22 @@ LOOT_CLOTHES = ("米色针织开衫", "碎花连衣裙", "白色帆布鞋", "焦
 LOOT_HOME = ("香薰蜡烛", "小台灯", "毛绒抱枕", "多肉盆栽")
 
 
-def _date_loot(amo, title):
+def _date_loot(bridge, title):
     body = str(title or "")
     if not any(word in body for word in ("逛街", "商场", "买", "游乐园")):
         return ""
     if random.random() < 0.6:
         item = random.choice(LOOT_CLOTHES)
-        try:
-            amo.add_closet_item({"name": item, "color": "", "category": "top",
-                                 "time_slot": "", "price": 0})
-        except Exception as exc:
-            isolated("date_engine._date_loot", exc)
+        bridge.call("add_closet_item", {"name": item, "color": "", "category": "top",
+                                        "time_slot": "", "price": 0})
         return item
     item = random.choice(LOOT_HOME)
-    try:
-        housing = getattr(amo, "housing", None)
-        if housing is not None:
+    housing = bridge.get("housing")
+    if housing is not None:
+        try:
             housing.add_furniture(item)
-    except Exception as exc:
-        isolated("date_engine._date_loot.2", exc)
+        except Exception as exc:
+            isolated("date_engine._date_loot.2", exc)
     return item
 
 
@@ -834,19 +672,38 @@ async def interrupt_date(plugin, text="", now=None):
                 "date:interrupt:%s:mem" % int(now.timestamp()))
         except Exception as exc:
             isolated("date_engine.interrupt_date", exc)
-    amo = _amo(plugin)
-    if amo is not None:
-        try:
-            amo.set_date_mood("刚碰面老公就被叫走加班，你很委屈、很难过，接下来别装开心。",
-                              now.timestamp() + 86400)
-            amo.set_date_fact("【绝对事实】你们刚碰面，老公就被老板叫回去加班，约会中断了，他没能陪你。",
-                              now.replace(hour=23, minute=59, second=0, microsecond=0).timestamp())
-            amo.set_date_now("", 0)
-            amo.set_current_action("", 0)
-        except Exception as exc:
-            isolated("date_engine.interrupt_date.2", exc)
+    bridge = _bridge(plugin)
+    if bridge.ready:
+        bridge.call("set_date_mood", "刚碰面老公就被叫走加班，你很委屈、很难过，接下来别装开心。",
+                    now.timestamp() + 86400)
+        bridge.call("set_date_fact", "【绝对事实】你们刚碰面，老公就被老板叫回去加班，约会中断了，他没能陪你。",
+                    now.replace(hour=23, minute=59, second=0, microsecond=0).timestamp())
+        _cancel_session(bridge, "interrupted")
+        bridge.call("set_current_action", "", 0)
     return {"ok": True, "interrupted": True, "title": title,
             "message": "（愣住）……好吧，你去忙吧，我等你回来。"}
+
+
+def _agreed_to_end(plugin, text, now=None):
+    """她刚提过「该回家了」（date_ending sent），他回短肯定词 → 视为同意收尾。"""
+    if not is_agreement(text):
+        return False
+    bridge = _bridge(plugin)
+    if not bridge.ready:
+        return False
+    now = now or _dt.datetime.now()
+    if _amo_has(bridge, "date_ending"):
+        result = bridge.call_compat("date_ending", [((now,), {}), ((), {})])
+        ending = result.value if result.ok else {}
+        # 会话 API 存在时只认会话，不再二次读老 kv
+        return bool(isinstance(ending, dict) and ending.get("sent"))
+    ending = bridge.call("kv_get", "date_ending", {}).value or {}
+    if not isinstance(ending, dict) or not ending.get("sent"):
+        return False
+    try:
+        return float(ending.get("until") or 0) > now.timestamp()
+    except (TypeError, ValueError):
+        return False
 
 
 async def handle_date_text(plugin, text, now=None):
@@ -854,25 +711,23 @@ async def handle_date_text(plugin, text, now=None):
     now = now or _dt.datetime.now()
     active = active_date(plugin)
     if active:
+        bridge = _bridge(plugin)
         if is_date_resume(text):
-            amo_r = _amo(plugin)
-            if amo_r is not None:
-                try:
-                    amo_r.db.kv_set("date_pause", {})
-                except Exception as exc:
-                    isolated("date_engine.resume", exc)
+            if bridge.ready:
+                _resume_session(bridge)
         if is_date_pause(text):
-            amo_p = _amo(plugin)
-            if amo_p is not None:
-                try:
-                    amo_p.db.kv_set("date_pause", {"at": now.timestamp(),
-                                                    "until": now.timestamp() + PAUSE_MAX_MINUTES * 60})
-                except Exception as exc:
-                    isolated("date_engine.pause", exc)
+            if bridge.ready:
+                _pause_session(bridge, now)
             return {"handled": False, "action": "pause"}
         if is_interrupt(text):
             out = await interrupt_date(plugin, text, now)
             return {"handled": True, "action": "interrupt", "message": out.get("message") or ""}
+        if _agreed_to_end(plugin, text, now):
+            # 她先提「该回家了」，他回「好/走吧」：也算收尾，不能继续挂着约会
+            await finish_date(plugin, now, reason="agreed")
+            if bridge.ready:
+                _clear_ending(bridge)
+            return {"handled": False, "action": "finish"}
         if is_date_end(text):
             # 解锁约会，只写客观事实；道别话由大模型下一句现场生成
             await finish_date(plugin, now, reason="user_done")
@@ -886,47 +741,48 @@ async def handle_date_text(plugin, text, now=None):
     return {"handled": False}
 
 
-async def finish_date(plugin, now=None, reason="timeout"):
-    """结束约会：只解锁状态 + 写客观事实，**不生成任何道别台词**（交给大模型）。"""
-    now = now or _dt.datetime.now()
-    active = _active(plugin)
-    if not active:
+#: 收尾幂等（Phase 14）：同进程重入用内存集合，跨轮重复用 repo meta 记 start。
+_FINISHING: set = set()
+FINISH_MARK_KEY = "date:finish_mark"
+
+
+def _finish_mark(plugin):
+    try:
+        return _repo(plugin).meta_get(FINISH_MARK_KEY, None)
+    except Exception:
         return None
-    title = str(active.get("title") or "约会")
-    _set_active(plugin, {})
-    now_minute = now.hour * 60 + now.minute
-    ama_trunc = _amo(plugin)
-    if ama_trunc is not None:
-        # 1) 正在进行的约会日程立刻截断到「现在」，不允许挂到原定的结束时间
-        try:
-            day = now.date().isoformat()
-            state = getattr(ama_trunc, "state", None)
-            current = list((getattr(state, "schedule", {}) or {}).get(day) or [])
-            patched = []
-            for row in current:
-                row = dict(row)
-                activity = str(row.get("activity") or "")
-                begin = _minutes(row.get("start"), 0)
-                finish = _minutes(row.get("end"), 0)
-                if (activity.startswith("和老公") or str(row.get("category")) == "social") \
-                        and begin <= now_minute < finish:
-                    row["end"] = now.strftime("%H:%M")
-                patched.append(row)
-            if patched != current:
-                state.commit_schedule_change(day, patched, old_items=current,
-                                             source="date", reason="约会结束截断")
-        except Exception as exc:
-            isolated("date_engine.finish_date.truncate", exc)
-        # 3) 幽灵取消：清掉约会相关的待触发状态，别回家了还弹「上菜了」
-        for key in ("date_pause", "date_preview", "date_meal", "date_timer"):
-            try:
-                ama_trunc.db.kv_set(key, {})
-            except Exception as exc:
-                isolated("date_engine.finish_date.ghost", exc)
-        try:
-            ama_trunc.set_date_incident("", 0)
-        except Exception as exc:
-            isolated("date_engine.finish_date.incident", exc)
+
+
+def _set_finish_mark(plugin, start):
+    try:
+        _repo(plugin).meta_set(FINISH_MARK_KEY, start or "")
+    except Exception as exc:
+        isolated("date_engine.finish_mark", exc)
+
+
+def _truncate_date_schedule(bridge, now):
+    """1) 正在进行的约会块截断到「现在」，还没开始的直接去掉（约会结束后不该再挂）。"""
+    try:
+        day = now.date().isoformat()
+        current = list(bridge.schedule().get(day) or [])
+        patched, changed = truncate_finished_blocks(current, now)
+        if changed:
+            bridge.call("commit_schedule_change", day, patched, old_items=current,
+                        source="date", reason="约会结束截断")
+    except Exception as exc:
+        isolated("date_engine.finish_date.truncate", exc)
+
+
+def _clear_ghost_state(bridge):
+    """3) 幽灵取消：清掉约会相关的待触发状态，别回家了还弹「上菜了」。"""
+    for key in ("date_pause", "date_preview", "date_meal", "date_timer"):
+        bridge.call("kv_set", key, {})
+    _clear_ending(bridge)
+    bridge.call("set_date_incident", "", 0)
+
+
+async def _finish_home(plugin, bridge, title, now, reason):
+    """日记/长期记忆/情绪 + 回家事实 + 会话收尾 + 回家日程（顺序固定）。"""
     finance = _finance(plugin)
     text = "[共同记忆] 今天和老公去%s约会了。" % title
     if finance is not None:
@@ -936,76 +792,92 @@ async def finish_date(plugin, now=None, reason="timeout"):
             finance.nudge_mood({"开心": 25, "幸福": 20}, "date:finish:%s:mood" % int(now.timestamp()))
         except Exception as exc:
             isolated("date_engine.finish_date", exc)
-    ama = _amo(plugin)
-    if ama is not None:
-        try:
-            ama.set_date_mood("约会刚结束，你带着今天真实的心情回到家。", now.timestamp() + 86400)
-            ama.set_last_date_event(title, now.timestamp())
-            ama.set_date_prep("", 0)
-            ama.set_date_incident("", 0)
-            end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
-            if end_of_day.timestamp() <= now.timestamp():
-                end_of_day = now + _dt.timedelta(hours=6)
-            home_line = ("【绝对事实】你们已经一起回到了共同的家——你们住在一起，不是送别、也不是各回各家。"
-                         "你现在踢掉鞋子，瘫在沙发上，包随手扔在旁边；洗了澡、卸了妆、换上舒服的睡衣，"
-                         "累但很充实。")
-            ama.set_date_fact(home_line, end_of_day.timestamp())
-            try:
-                ama.set_date_home(title, now.timestamp())
-            except AttributeError:
-                try:
-                    ama.set_date_separation(title, now.timestamp())
-                except (AttributeError, TypeError):
-                    pass  # cleanup: best-effort
-            except (TypeError,):
-                pass  # cleanup: best-effort
-            ama.set_date_now("", 0)
-            try:
-                home_at = (now + _dt.timedelta(minutes=10)).strftime("%H:%M")
-                sofa_end = (now + _dt.timedelta(minutes=90)).strftime("%H:%M")
-                day = now.date().isoformat()
-                ama.state.add_schedule_item(day, {"start": now.strftime("%H:%M"), "end": home_at,
-                                                  "activity": "和老公一起走回家", "place": "路上",
-                                                  "category": "social", "zone": "road",
-                                                  "subject": "bot", "happened": True},
-                                            source="date", reason="约会收尾")
-                ama.state.add_schedule_item(day, {"start": home_at, "end": sofa_end,
-                                                  "activity": "到家瘫在沙发上", "place": "家",
-                                                  "category": "rest", "zone": "home",
-                                                  "subject": "bot"},
-                                            source="date", reason="约会收尾")
-            except Exception as exc:
-                isolated("date_engine.finish_date.schedule", exc)
-            try:
-                ama.set_current_action(
-                    "和老公一起到家，瘫在沙发上",
-                    (now + _dt.timedelta(minutes=90)).timestamp(),
-                    place="家", zone="home", category="rest")
-            except Exception as exc:
-                isolated("date_engine.finish_date.action", exc)
-            ending_fact = {
-                "user_done": "时间不早了，吃饱喝足了，该一起回家了。",
-                "timeout": "约会已经两个多小时，吃饱喝足了，该一起回家了。",
-                "silent": "他好像去忙了，你在犹豫是继续等他一起回家，还是自己先溜达回去。",
-            }.get(reason, "约会该收尾了，你们准备一起回家。")
-            try:
-                ama.set_date_ending(ending_fact, reason=reason)
-            except (AttributeError, TypeError):
-                pass  # cleanup: best-effort
-            _date_loot(ama, title)
-        except Exception as exc:
-            isolated("date_engine.finish_date.2", exc)
-    if ama_trunc is not None:
+    if not bridge.ready:
+        return
+    bridge.call("set_date_mood", "约会刚结束，你带着今天真实的心情回到家。", now.timestamp() + 86400)
+    bridge.call("set_last_date_event", title, now.timestamp())
+    bridge.call("set_date_prep", "", 0)
+    end_of_day = now.replace(hour=23, minute=59, second=0, microsecond=0)
+    if end_of_day.timestamp() <= now.timestamp():
+        end_of_day = now + _dt.timedelta(hours=6)
+    home_line = ("【绝对事实】约会已经结束，他不在你身边；你一个人回到出租屋，接下来只能手机/视频联系。"
+                 "他已经回他自己那边去了，你现在洗了澡、卸了妆、换上舒服的睡衣，"
+                 "累但很充实。")
+    bridge.call("set_date_fact", home_line, end_of_day.timestamp())
+    # 顺序：日程截断（上面）→ 关会话写 date_home → 再写「一个人走回家」，
+    # 避免回家日程被截断逻辑误伤，也避免 date_home 先写导致块还在。
+    _finish_session(bridge, title, reason, now)
+    home_at = (now + _dt.timedelta(minutes=10)).strftime("%H:%M")
+    sofa_end = (now + _dt.timedelta(minutes=90)).strftime("%H:%M")
+    day = now.date().isoformat()
+    bridge.call("add_schedule_item", day,
+                {"start": now.strftime("%H:%M"), "end": home_at,
+                 "activity": "一个人走回家（耳机里还连着）", "place": "路上",
+                 "category": "life", "zone": "road", "subject": "bot", "happened": True},
+                source="date", reason="约会收尾")
+    bridge.call("add_schedule_item", day,
+                {"start": home_at, "end": sofa_end,
+                 "activity": "到家给他发消息/视频道晚安", "place": "家",
+                 "category": "rest", "zone": "home", "subject": "bot"},
+                source="date", reason="约会收尾")
+    bridge.call("set_current_action", "一个人到家，给他发消息",
+                (now + _dt.timedelta(minutes=90)).timestamp(),
+                place="家", zone="home", category="rest")
+    ending_fact = {
+        "user_done": "时间不早了，吃饱喝足了，该回去了；约会结束，他不在你身边，你自己先回家。",
+        "timeout": "约会已经两个多小时，吃饱喝足了，该回去了；他不在你身边，你自己先回家。",
+        "silent": "他好像去忙了，你在犹豫是继续等他，还是自己先溜达回去；他不在你身边。",
+    }.get(reason, "约会该收尾了，该回去了；他不在你身边，你自己先回家。")
+    bridge.call("set_date_ending", ending_fact, reason=reason)
+    _date_loot(bridge, title)
+
+
+async def _finish_date_once(plugin, now, reason, title, bridge):
+    _truncate_date_schedule(bridge, now)
+    _clear_ghost_state(bridge)
+    await _finish_home(plugin, bridge, title, now, reason)
+    if bridge.ready:
         # 2) 剩余时间交给大模型重排（严禁代码写死「休息」）
         try:
-            await replan_remaining(plugin, ama_trunc, now, title)
+            await replan_remaining(plugin, bridge, now, title)
         except Exception as exc:
             isolated("date_engine.finish_date.replan", exc)
+    finance = _finance(plugin)
     if finance is not None:
         try:
             finance.nudge_mood({"疲惫": 15, "饥饿": 8}, "date:finish:%s:body" % int(now.timestamp()))
         except Exception as exc:
             isolated("date_engine.finish_date.3", exc)
+
+
+async def finish_date(plugin, now=None, reason="timeout"):
+    """结束约会：只解锁状态 + 写客观事实，**不生成任何道别台词**（交给大模型）。
+
+    Phase 14 幂等：tick 与聊天可能同时判定结束，重复收尾只生效一次——
+    同进程用 _FINISHING 挡住，跨轮用 repo meta 里的 date:finish_mark（记这次约会的
+    start）挡住，不会多写一份记忆/日记/回家日程。
+    """
+    now = now or _dt.datetime.now()
+    active = _active(plugin)
+    if not active:
+        return None
+    key = id(plugin)
+    if key in _FINISHING:
+        return {"ok": True, "duplicate": True, "reason": reason}
+    start = active.get("start")
+    if start and _finish_mark(plugin) == start:
+        isolated("date_engine.finish_date.duplicate", RuntimeError("重复收尾已忽略"))
+        return {"ok": True, "duplicate": True, "reason": reason}
+    title = str(active.get("title") or "约会")
+    _set_active(plugin, {})
+    bridge = _bridge(plugin)
+    _FINISHING.add(key)
+    try:
+        await _finish_date_once(plugin, now, reason, title, bridge)
+    finally:
+        _FINISHING.discard(key)
+    if start:
+        _set_finish_mark(plugin, start)
     return {"ok": True, "reason": reason}
 
 
@@ -1047,16 +919,15 @@ def _parse_segments(text, now):
     return out
 
 
-async def replan_remaining(plugin, ama, now, title=""):
+async def replan_remaining(plugin, bridge, now, title=""):
     """约会提前结束后：让 LLM 自己安排剩下的时间，代码不做任何默认填充。"""
-    try:
-        llm = getattr(ama, "llm", None)
-        if llm is None or not hasattr(llm, "chat_raw"):
-            return []
-        umos = ama._owner_umos() if hasattr(ama, "_owner_umos") else []
-        umo = umos[0] if umos else ""
-    except Exception:
+    if not isinstance(bridge, AmoBridge):      # 兼容老调用：直接传 amo
+        bridge = AmoBridge(plugin, amo=bridge)
+    llm = bridge.get("llm")
+    if llm is None or not callable(getattr(llm, "chat_raw", None)):
         return []
+    umos = bridge.owner_umos()
+    umo = umos[0] if umos else ""
     finance = _finance(plugin)
     mood, fatigue = "平静", 0
     try:
@@ -1067,25 +938,21 @@ async def replan_remaining(plugin, ama, now, title=""):
         fatigue = int(finance.fatigue() or 0)
     except Exception:
         pass  # cleanup: best-effort
-    prompt = ("现在是 %s。你们刚在%s结束约会、买完单，正准备一起回家（你们住在一起，不是分开）。\n"
+    prompt = ("现在是 %s。你们刚在%s结束约会、买完单；约会结束他不在她身边，她一个人回去，"
+              "接下来只能手机/视频联系。\n"
               "她现在的状态：心情%s，疲惫值%d。\n"
               "请把 %s 到 23:00 的时间安排成 2-4 条日程，首尾相接、不重叠，"
               "只能写事实里出现过的地点（家 / 路上 / 楼下小馆）。\n"
               "JSON 数组：{\"start\":\"HH:MM\",\"end\":\"HH:MM\",\"activity\":\"一句人话\","
               "\"place\":\"家|路上\",\"category\":\"rest|life|social\",\"zone\":\"home|road\"}"
               % (now.strftime("%H:%M"), title or "外面", mood, fatigue, now.strftime("%H:%M")))
-    try:
-        text = await llm.chat_raw(umo, PLAN_SYSTEM, prompt)
-    except Exception as exc:
-        isolated("date_engine.replan.llm", exc)
+    result = await bridge.call_async("chat_raw", umo, PLAN_SYSTEM, prompt)
+    if not result.ok:
         return []
-    segments = _parse_segments(text, now)
+    segments = _parse_segments(result.value, now)
     for seg in segments:
-        try:
-            ama.state.add_schedule_item(now.date().isoformat(), seg,
-                                        source="date", reason="约会收尾重推")
-        except Exception as exc:
-            isolated("date_engine.replan.write", exc)
+        bridge.call("add_schedule_item", now.date().isoformat(), seg,
+                    source="date", reason="约会收尾重推")
     return segments
 
 
@@ -1095,17 +962,8 @@ async def tick(plugin, now=None):
     active = _active(plugin)
     if active and float(active.get("end") or 0) <= now.timestamp():
         await finish_date(plugin, now, reason="timeout")
-    elif active:
-        ama = _amo(plugin)
-        pause = {}
-        if ama is not None:
-            try:
-                pause = ama.db.kv_get("date_pause", {}) or {}
-            except Exception:
-                pause = {}
-        if isinstance(pause, dict) and pause.get("at"):
-            if now.timestamp() - float(pause.get("at") or 0) > PAUSE_MAX_MINUTES * 60:
-                await finish_date(plugin, now, reason="pause_timeout")
+    elif active and _pause_expired(_bridge(plugin), now):
+        await finish_date(plugin, now, reason="pause_timeout")
     rows = _load(plugin)
     changed = False
     for row in rows:
@@ -1131,13 +989,8 @@ async def tick(plugin, now=None):
                     "date:miss:%s:mem" % int(row["missed_at"]))
             except Exception as exc:
                 isolated("date_engine.tick", exc)
-        amo = _amo(plugin)
-        if amo is not None:
-            try:
-                amo.set_date_mood("他忘了你们的约会，你很失落，接下来两天有点冷淡。",
-                                  now.timestamp() + 2 * 86400)
-            except Exception as exc:
-                isolated("date_engine.tick.2", exc)
+        _bridge(plugin).call("set_date_mood", "他忘了你们的约会，你很失落，接下来两天有点冷淡。",
+                             now.timestamp() + 2 * 86400)
     if changed:
         _save(plugin, rows)
     return {"finished": bool(active), "missed": changed}

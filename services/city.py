@@ -114,7 +114,7 @@ async def move_to(plugin, name):
         state = getattr(amo, "state", None)
         world = dict(getattr(state, "worldview", {}) or {})
         world["city"] = name
-        state.worldview = world  # type: ignore[union-attr]
+        state.worldview = world
         db = getattr(amo, "db", None)
         if db is not None:
             db.kv_set("worldview", world)
@@ -230,7 +230,7 @@ async def settle_pending_fee(plugin):
         settled = await finance.expense(
             pending, "补交搬家费", "move-settle:%s" % _dt.date.today().isoformat())
         if isinstance(settled, dict) and settled.get("ok"):
-            repo.meta_set("move_pending_fee", 0)  # type: ignore[union-attr]
+            repo.meta_set("move_pending_fee", 0)
             return "；搬家费 %s 已结清" % yuan(pending)
     except Exception as exc:
         isolated("city.settle_fee", exc)

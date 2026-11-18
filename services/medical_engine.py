@@ -114,8 +114,15 @@ class MedicalEngine:
             from services.health_bridge import get_severity, get_sick_status, is_sick
         if amo is None and self.finance is not None:
             amo = self.finance._amo()
+        try:
+            from .health_bridge import health_dict
+        except ImportError:
+            from services.health_bridge import health_dict
+        health = health_dict(amo)
         return {"sick": is_sick(amo), "status": get_sick_status(amo),
-                "severity": get_severity(amo)}
+                "severity": get_severity(amo),
+                "until": str(health.get("until") or ""),
+                "note": str(health.get("note") or "")}
 
     def get_current_health(self):
         return self.health_hp()
@@ -137,6 +144,47 @@ class MedicalEngine:
         except Exception as exc:
             isolated("medical.hp", exc)
         return 80
+
+    async def charge_schedule_visit(self, day=None):
+        """日程里出现医院/看病时，补一笔挂号+交通费；同一天只扣一次。
+
+        守护医疗事件（体检/看病）自己会扣医院交通费，这里按 idem 查重，绝不重复扣。
+        """
+        day = day or _dt.date.today()
+        day_text = day.isoformat()
+        key = "hospital_visit:" + day_text
+        try:
+            if self.repo.meta_get(key):
+                return None
+        except Exception:
+            return None
+        amo = self.finance._amo() if hasattr(self.finance, "_amo") else None
+        if amo is None:
+            return None
+        try:
+            rows = amo.state.db.get_schedule(day_text) or []
+        except Exception:
+            return None
+        text = " ".join(str(row.get("activity") or "") + " " + str(row.get("place") or "")
+                        for row in rows if isinstance(row, dict))
+        if not any(word in text for word in ("医院", "看病", "挂号", "就诊", "门诊")):
+            return None
+        idem = "hospital:" + day_text
+        try:
+            for row in self.finance.ledger(500) or []:
+                if isinstance(row, dict) and str(row.get("idem") or "") == idem:
+                    self.repo.meta_set(key, "1")
+                    return None
+        except Exception as exc:
+            isolated("medical.hospital.ledger", exc)
+        res = await self.finance.expense(1500, "去医院（挂号+交通）", idem, necessary=True)
+        if isinstance(res, dict) and res.get("ok"):
+            try:
+                self.repo.meta_set(key, "1")
+            except Exception as exc:
+                isolated("medical.hospital.meta", exc)
+            return {"ok": True, "amount_cents": 1500}
+        return res
 
     async def checkup(self, day=None):
         """体检：300-500 元（工作日半天事假），按 HP 出报告。"""

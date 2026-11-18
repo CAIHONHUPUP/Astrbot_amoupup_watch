@@ -133,20 +133,13 @@ class Trading:
             return next_trading_day(next_trading_day(day))
         return next_trading_day(day)
 
-    def _invested_cents(self):
-        total = 0
-        try:
-            for row in self.repo.positions():
-                total += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)  # type: ignore[assignment]
-        except Exception:
-            return 0
-        return int(round(total))
-
     def _cap_ok(self, wallet, add_cents):
-        """投资不超过存款的 50%（存款 = 现金 + 已投入）。"""
-        invested = self._invested_cents()
-        deposit = int(wallet.balance()) + invested
-        return (invested + int(add_cents)) <= deposit * 0.5 + 1
+        """单笔投资不超过当前现金的 50%（用户口径：现金 6000 → 单笔最多 3000）。"""
+        try:
+            cash = int(wallet.balance())
+        except (TypeError, ValueError):
+            return False
+        return int(add_cents) <= int(cash * 0.5) + 1
 
     # ---------- 股票 ----------
     async def buy(self, code, qty, price=None, idem=""):
@@ -174,8 +167,18 @@ class Trading:
         wallet = self._wallet()
         if wallet is None:
             return {"ok": False, "message": "钱包未就绪"}
+        # 单笔上限 = 当前现金的 50%；LLM 给的数量超了就按 100 股整手往下裁，
+        # 一手都买不起才拒绝（2026-11-18 线上：6604 元下 400 股本就该成交）。
+        cap_cents = int(int(wallet.balance()) * 0.5)
+        if amount > cap_cents:
+            max_qty = int(cap_cents // price_cents // LOT) * LOT
+            if max_qty < LOT:
+                return {"ok": False, "message": "投资不能超过当前存款的 50%"}
+            qty = max_qty
+            amount = price_cents * qty
+            fee = _fee_buy(amount)
         if not self._cap_ok(wallet, amount):
-            return {"ok": False, "message": "投资不能超过存款的 50%"}
+            return {"ok": False, "message": "投资不能超过当前存款的 50%"}
         if int(wallet.balance()) < amount + fee:
             return {"ok": False, "message": "余额不足，无法支付交易费用"}
         if not wallet.debit(amount + fee, "买入 %s" % code, idem):

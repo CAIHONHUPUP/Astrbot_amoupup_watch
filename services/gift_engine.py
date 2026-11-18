@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """人情礼节：NPC 生日、父母礼物、份子钱、转账尽孝。"""
 from __future__ import annotations
+from typing import Any
 
 import logging
 logger = logging.getLogger("amo.watch")
@@ -20,13 +21,13 @@ GIFT_POOL = {
 
 def _birthdays(plugin):
     repo = _repo(plugin)
-    raw = {}  # type: ignore[var-annotated]
+    raw: dict[str, Any] = {}
     try:
         raw = repo.meta_get("npc_birthdays", {}) or {}
         if isinstance(raw, str):
             raw = json.loads(raw or "{}")
     except Exception:
-        raw = {}
+        raw: dict[str, Any] = {}
     if not raw and repo is not None:
         import random
         months = list(range(3, 13))
@@ -71,7 +72,7 @@ def _done_key(name, year):
 
 def upcoming(plugin, now=None):
     now = now or _dt.datetime.now()
-    out = []
+    out: list[Any] = []
     for name, md in _birthdays(plugin).items():
         try:
             month, day = [int(x) for x in md.split("-")]
@@ -91,7 +92,7 @@ async def tick(plugin, now=None):
     amo = _amo(plugin)
     if repo is None or finance is None:
         return None
-    out = {}  # type: ignore[var-annotated]
+    out: dict[str, Any] = {}
     for name, md, delta in upcoming(plugin, now):
         year = now.year
         try:

@@ -18,6 +18,17 @@ def _clean_clock():
         pass
 
 
+@pytest.fixture
+def zone_lookup(monkeypatch):
+    """隔离宿主时区库：Windows 默认没有 tzdata，zoneinfo 解析不了 Asia/Tokyo。
+
+    configure() 查不到名字时会按生产兜底回退到 Asia/Shanghai（不能为了测试改
+    生产代码）。只关心 tzset 分支的用例，让 get_zone() 认下名字就够了；
+    「查不到就回退」由 test_configure_falls_back_when_zone_unknown 单独覆盖。
+    """
+    monkeypatch.setattr(clock, "get_zone", lambda name: object() if name else None)
+
+
 def test_normalize_values():
     assert clock.normalize("") == ""
     assert clock.normalize("auto") == ""
@@ -57,13 +68,26 @@ def test_get_zone_and_fixed_offset(monkeypatch):
     assert clock.get_zone("Asia/Tokyo") is None
 
 
-def test_configure_without_tzset(monkeypatch):
+def test_configure_without_tzset(monkeypatch, zone_lookup):
     monkeypatch.delattr(clock._time, "tzset", raising=False)
+    monkeypatch.setenv("TZ", "Asia/Seoul")
     assert clock.configure("Asia/Tokyo") == "Asia/Tokyo"
+    assert clock.applied() is False
+    # 没有 tzset 就不许碰 TZ：IANA 名字会被 C 运行库当非法值回落 UTC，
+    # datetime.now() 和 fromtimestamp() 会差一个时区（Windows 上就是这样）。
+    assert os.environ.get("TZ") == "Asia/Seoul"
+
+
+def test_configure_falls_back_when_zone_unknown(monkeypatch):
+    """时区库查不到名字时回退默认时区，并且不能标记为已生效。"""
+    monkeypatch.delattr(clock._time, "tzset", raising=False)
+    monkeypatch.setattr(clock, "get_zone", lambda name: None)
+    assert clock.configure("Not/AZone") == clock.DEFAULT_TIMEZONE
+    assert clock._state["name"] == clock.DEFAULT_TIMEZONE
     assert clock.applied() is False
 
 
-def test_configure_and_restore_with_tzset(monkeypatch):
+def test_configure_and_restore_with_tzset(monkeypatch, zone_lookup):
     monkeypatch.setattr(clock._time, "tzset", lambda: None, raising=False)
     monkeypatch.setenv("TZ", "Asia/Seoul")
     assert clock.configure("Asia/Tokyo") == "Asia/Tokyo"
@@ -75,7 +99,7 @@ def test_configure_and_restore_with_tzset(monkeypatch):
     assert os.environ.get("TZ") == "Asia/Seoul"
 
 
-def test_configure_failure_marks_not_applied(monkeypatch):
+def test_configure_failure_marks_not_applied(monkeypatch, zone_lookup):
     def boom():
         raise OSError("tzset failed")
 
@@ -84,7 +108,7 @@ def test_configure_failure_marks_not_applied(monkeypatch):
     assert clock.applied() is False
 
 
-def test_configure_failure_rolls_back_tz(monkeypatch):
+def test_configure_failure_rolls_back_tz(monkeypatch, zone_lookup):
     monkeypatch.setenv("TZ", "Asia/Seoul")
 
     def boom():
@@ -96,7 +120,7 @@ def test_configure_failure_rolls_back_tz(monkeypatch):
     assert os.environ.get("TZ") == "Asia/Seoul"   # 失败不能把进程时区留在错的值上
 
 
-def test_configure_failure_removes_tz_when_unset(monkeypatch):
+def test_configure_failure_removes_tz_when_unset(monkeypatch, zone_lookup):
     monkeypatch.delenv("TZ", raising=False)
 
     def boom():

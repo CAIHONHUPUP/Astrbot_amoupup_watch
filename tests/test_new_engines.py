@@ -11,15 +11,10 @@ from services.work_engine import FinanceSalary
 from services.medical_engine import MedicalEngine
 
 
-class Repo:
-    def __init__(self):
-        self.meta = {}
-
-    def meta_get(self, k, d=None):
-        return self.meta.get(k, d)
-
-    def meta_set(self, k, v):
-        self.meta[k] = v
+try:  # Phase 15：meta 桩改用 tests/fixtures.py 的共享实现（断言不变）
+    from tests.fixtures import FakeRepo as Repo  # noqa: E402
+except ImportError:
+    from fixtures import FakeRepo as Repo  # noqa: E402
 
 
 class Finance:

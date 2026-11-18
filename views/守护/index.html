@@ -120,6 +120,22 @@
   .house-meta .sub { margin-top:3px; white-space:normal; }
   .house-actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; align-items:center; }
   .house-actions button { padding:5px 8px; font-size:12px; border-radius:8px; min-height:0; }
+  .decision-list { display:flex; flex-direction:column; gap:8px; }
+  .decision-item { display:flex; gap:10px; align-items:center; border:1px solid var(--line); border-radius:14px; padding:9px 10px; background:var(--soft); }
+  .decision-time { flex:0 0 46px; font-size:13px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .decision-tag { flex:0 0 auto; font-size:11px; border:1px solid var(--line); border-radius:999px; padding:2px 8px; }
+  .decision-tag.eat { color:#b45309; border-color:#fde3bd; background:#fff8ed; }
+  .decision-tag.skip { color:#0f766e; border-color:#bfeee9; background:#effcf9; }
+  .decision-why { flex:1; min-width:0; font-size:12px; color:var(--muted); line-height:1.5; }
+  .decision-meta { flex:0 0 auto; text-align:right; font-size:12px; color:var(--muted); line-height:1.5; }
+  .decision-tag.pending { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
+  .decision-tag.kind { color:#334155; border-color:#e2e8f0; background:#f8fafc; }
+  .decision-recon { margin-top:8px; font-size:12px; color:var(--muted); }
+  .decision-recon.pending { color:#b91c1c; }
+  .decision-kinds, .decision-blocks { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .decision-sub { font-size:12px; font-weight:650; color:var(--muted); }
+  .decision-row { display:flex; gap:10px; align-items:center; border:1px solid var(--line); border-radius:12px; padding:7px 9px; }
+  .decision-row .decision-why { flex:1; min-width:0; font-size:12px; color:var(--muted); line-height:1.5; }
   .brief { border:1px solid #cfeafb; background:linear-gradient(180deg,#f6fcff,#eef8ff); border-radius:14px; padding:12px 14px; font-size:13px; line-height:1.7; white-space:pre-wrap; display:none; }
   .brief.show { display:block; }
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:#0f172a; color:#fff;
@@ -149,7 +165,8 @@
   <button data-tab="social">社会</button>
   <button data-tab="medical">医疗</button>
   <button data-tab="housing">房屋</button>
-    <button data-tab="status">状态</button>
+  <button data-tab="decisions">决定</button>
+  <button data-tab="status">状态</button>
 </nav>
 
 <main>
@@ -301,6 +318,19 @@
     </div>
   </section>
 
+  <section class="panel" id="tab-decisions">
+    <div class="card">
+      <div class="card-h"><h2>今天的决定</h2><span class="tag">只读</span>
+        <button class="ghost" id="decisionRefresh" style="margin-left:auto">刷新</button>
+      </div>
+      <div class="sub" id="decisionHint">她自己拿的主意：吃不吃宵夜、去不去约会、买不买东西，都记在这里。</div>
+      <div class="decision-recon" id="decisionRecon"></div>
+      <div id="decisionList" class="decision-list"></div>
+      <div id="decisionKinds" class="decision-kinds"></div>
+      <div id="decisionBlocks" class="decision-blocks"></div>
+    </div>
+  </section>
+
   <section class="panel" id="tab-status">
     <div class="card">
       <div class="card-h"><h2>运行状态</h2><span class="tag">实时</span>
@@ -431,6 +461,7 @@
     document.querySelectorAll(".panel").forEach(function (p) { p.classList.toggle("active", p.id === "tab-" + btn.dataset.tab); });
     if (btn.dataset.tab === "status") refreshStatus();
     if (btn.dataset.tab === "housing") loadHousing();
+    if (btn.dataset.tab === "decisions") loadDecisions();
     if (btn.dataset.tab === "finance") loadFinance();
   });
 
@@ -567,7 +598,7 @@
     }
     tag.textContent = mood.dominant || "—";
     bar.style.width = Math.max(2, Math.min(100, Number(score))) + "%";
-    line.textContent = (mood.last_event || "") + " · 心情值 " + score;
+    line.textContent = (mood.last_event || "") + " · 心情值 " + Math.round(Number(score) || 0);
   }
 
   function renderMarket(m) {
@@ -638,8 +669,20 @@
       return;
     }
     var label = decision.action === "buy" ? "买入" : (decision.action === "sell" ? "卖出" : "不动");
-    tag.textContent = label + (decision.executed ? " · 已执行" : " · 仅记录");
-    line.textContent = (decision.at || "") + "  " + decision.reason;
+    var status = " · 仅记录";
+    if (decision.executed) {
+      status = decision.from_pending ? " · 已执行（午间计划）" : " · 已执行";
+    } else if (decision.pending) {
+      status = " · 计划（14:50 待执行）";
+    } else if (decision.action === "buy" || decision.action === "sell") {
+      status = " · 未成交";
+    }
+    tag.textContent = label + status;
+    var extra = "";
+    if (!decision.executed && decision.message && (decision.action === "buy" || decision.action === "sell")) {
+      extra = "（" + decision.message + "）";
+    }
+    line.textContent = (decision.at || "") + "  " + decision.reason + extra;
   }
 
   function renderHelp(state) {
@@ -882,7 +925,18 @@
     if (!box) return;
     apiGet("finance/medical").then(function (d) {
       d = d || {};
-      var sick = d.is_sick ? "生病中（到 " + (d.sick_until || "—") + "）" : "健康";
+      var sickUntil = "";
+      if (d.sick_until) {
+        var ts = Number(d.sick_until);
+        if (isFinite(ts) && ts > 0) {
+          var dt = new Date(ts * 1000);
+          sickUntil = " 到 " + (dt.getMonth() + 1) + "-" + dt.getDate() + " " +
+            ("0" + dt.getHours()).slice(-2) + ":" + ("0" + dt.getMinutes()).slice(-2);
+        } else {
+          sickUntil = " 到 " + d.sick_until;
+        }
+      }
+      var sick = d.is_sick ? "生病中（" + (d.sick_status || "不适") + sickUntil + "）" : "健康";
       var bed = d.in_bed_rest ? "卧床休养中" : "正常活动";
       if (q("medState")) q("medState").textContent = sick;
       if (q("medLast")) q("medLast").textContent = d.last_checkup || "—";
@@ -980,27 +1034,39 @@
     }
     apiGet("ledger").then(function (d) {
       var items = (d && d.items) || [];
-      var groups = {};
-      items.forEach(function (it) {
-        var cat = it.category || "其他";
-        (groups[cat] = groups[cat] || []).push(it);
-      });
+      if (!Array.isArray(items)) items = [];
+      function ledgerStamp(it) {
+        if (it.date && it.time) return it.date + " " + it.time;
+        var ts = Number(it.ts || 0);
+        if (!isFinite(ts) || ts <= 0) return "时间未知";
+        var when = new Date(ts * 1000);
+        if (isNaN(when.getTime())) return "时间未知";
+        return when.getFullYear() + "-" + ("0" + (when.getMonth() + 1)).slice(-2) + "-"
+          + ("0" + when.getDate()).slice(-2) + " "
+          + ("0" + when.getHours()).slice(-2) + ":" + ("0" + when.getMinutes()).slice(-2);
+      }
       var html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
         + '<b>明细流水</b><button id="expenseClose" class="ghost">关闭</button></div>';
-      if (!items.length) html += "还没有流水";
-      Object.keys(groups).forEach(function (cat) {
-        html += '<div style="margin-top:8px"><b>【' + esc(cat) + '】</b></div>';
-        groups[cat].forEach(function (it) {
-          var when = new Date((it.ts || 0) * 1000);
-          var hh = ("0" + when.getHours()).slice(-2) + ":" + ("0" + when.getMinutes()).slice(-2);
+      if (!items.length) {
+        html += "还没有流水";
+      } else {
+        html += '<div style="max-height:360px;overflow-y:auto">';
+        items.forEach(function (it) {
+          it = it || {};
           var amt = (Math.abs(it.delta_cents || 0) / 100).toFixed(2);
           var sign = (it.delta_cents || 0) < 0 ? "-" : "+";
-          var label = cleanLedgerLabel(it.item_name || it.reason || "一笔花销");
-          html += '<div style="margin:4px 0">' + hh + " "
-            + esc(label)
-            + " (" + sign + amt + "元)</div>";
+          var label = esc(cleanLedgerLabel(it.item_name || it.reason || "一笔花销"));
+          var cat = esc(it.category || "其他");
+          html += '<div style="margin:4px 0;line-height:1.5">'
+            + '<span style="color:#888;white-space:nowrap">' + esc(ledgerStamp(it)) + '</span> '
+            + '<span style="display:inline-block;padding:0 4px;margin-right:4px;border-radius:3px;'
+            + 'background:rgba(120,120,120,.15);color:#666;font-size:12px">' + cat + '</span>'
+            + label
+            + ' <span style="color:' + (sign === "-" ? "#c0392b" : "#27ae60") + '">('
+            + sign + amt + '元)</span></div>';
         });
-      });
+        html += "</div>";
+      }
       box.innerHTML = html;
       var close = q("expenseClose");
       if (close) close.onclick = function () {
@@ -1082,6 +1148,115 @@
   var houseRefresh = q("houseRefresh");
   if (houseRefresh) houseRefresh.addEventListener("click", function () { loadHousing(); });
 
+  // ---------- decisions（她的自主决定：只读，只看今天） ----------
+  var DECISION_FACTOR_NAMES = { hunger: "饿", mood: "心情", cash: "余额", time: "时段", health: "身体" };
+  function decisionFactorsText(factors) {
+    factors = factors || {};
+    var parts = [];
+    Object.keys(DECISION_FACTOR_NAMES).forEach(function (key) {
+      if (!(key in factors)) return;
+      var v = Number(factors[key]);
+      if (!isFinite(v) || v === 0) return;
+      parts.push(DECISION_FACTOR_NAMES[key] + (v > 0 ? " +" : " ") + (Math.round(v * 10) / 10));
+    });
+    return parts.join(" · ") || "凭感觉";
+  }
+  function decisionHour(hour) {
+    var h = Number(hour);
+    if (!isFinite(h) || h < 0 || h > 23) return "—";
+    return (h < 10 ? "0" : "") + h + ":00";
+  }
+  function decisionPending(recon, index) {
+    var rows = (recon && recon.items) || [];
+    var row = rows[index];
+    return row && row.status === 'pending' ? row : null;
+  }
+  function renderDecisionRecon(d) {
+    var box = q('decisionRecon');
+    var recon = (d && d.reconcile) || {};
+    var pending = Number(recon.pending || 0);
+    if (box) {
+      box.className = 'decision-recon' + (pending ? ' pending' : '');
+      if (pending) {
+        box.textContent = '有 ' + pending + ' 笔待对账：决定金额和流水对不上';
+      } else if (Number(recon.checked || 0) > 0) {
+        box.textContent = '金额已和流水对上（' + Number(recon.checked) + ' 笔）';
+      } else {
+        box.textContent = '今天还没有需要花钱的决定';
+      }
+    }
+    var blocksBox = q('decisionBlocks');
+    if (!blocksBox) return;
+    var blocks = (d && d.blocks) || [];
+    if (!blocks.length) { blocksBox.innerHTML = ''; return; }
+    blocksBox.innerHTML = '<div class="decision-sub">今天各时段消费</div>' +
+      blocks.map(function (b) {
+        return '<div class="decision-row">' +
+          '<div class="decision-time">' + esc(decisionHour(b.hour)) + '</div>' +
+          '<span class="decision-tag kind">' + esc('消费 ' + Number(b.count || 0) + ' 笔') + '</span>' +
+          '<div class="decision-why">' + esc(houseMoney(Number(b.amount_cents || 0))) + '</div>' +
+          '</div>';
+      }).join('');
+  }
+  function renderDecisionKinds(d) {
+    var box = q('decisionKinds');
+    if (!box) return;
+    var rows = (d && d.kinds) || [];
+    if (!rows.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="decision-sub">约会 · 社交 · 购物 · 看病</div>' +
+      rows.map(function (it) {
+        var amount = Number(it.amount_cents) > 0 ? houseMoney(it.amount_cents) : '';
+        var when = it.day ? (String(it.day).slice(5) + (it.time ? " " + it.time : "")) : String(it.time || "");
+        var meta = [when, amount].filter(Boolean).join(' · ') || String(it.day || '');
+        var why = String(it.title || '') + (it.detail ? ' · ' + String(it.detail) : '');
+        return '<div class="decision-row">' +
+          '<span class="decision-tag kind">' + esc(it.label || it.kind || '决定') + '</span>' +
+          '<div class="decision-why">' + esc(why) + '</div>' +
+          '<div class="decision-meta">' + esc(meta) + '</div>' +
+          '</div>';
+      }).join('');
+  }
+  function renderDecisions(d) {
+    var list = q("decisionList");
+    if (!list) return;
+    var items = (d && d.items) || [];
+    var extras = (d && d.kinds) || [];
+    var recon = (d && d.reconcile) || {};
+    renderDecisionRecon(d);
+    renderDecisionKinds(d);
+    if (!items.length) {
+      list.innerHTML = "<div class=\"sub\">" + (extras.length ? "今天没有宵夜决定" : "今天还没有需要她决定的事") + "</div>";
+      return;
+    }
+    list.innerHTML = items.map(function (it, index) {
+      var eat = !!it.eat;
+      var label = eat ? "吃了" : "忍住了";
+      var cls = eat ? "eat" : "skip";
+      if (decisionPending(recon, index)) { label += " · 待对账"; cls += " pending"; }
+      var food = it.food ? " · " + esc(it.food) : "";
+      var amount = Number(it.amount_cents) > 0 ? houseMoney(it.amount_cents) : "没花钱";
+      var block = it.block_id ? ("块 " + String(it.block_id).slice(0, 8)) : "没落块";
+      return "<div class=\"decision-item\">" +
+        "<div class=\"decision-time\">" + esc(decisionHour(it.hour)) + "</div>" +
+        "<span class=\"decision-tag " + cls + "\">" + label + "</span>" +
+        "<div class=\"decision-why\">" + esc(decisionFactorsText(it.factors)) + food + "</div>" +
+        "<div class=\"decision-meta\">" + esc(amount) + "<br>" + esc(block) + "</div>" +
+        "</div>";
+    }).join("");
+  }
+  async function loadDecisions() {
+    try {
+      var data = await apiGet("decisions");
+      if (!data || data.ok === false) throw new Error((data && data.message) || "决定数据为空");
+      renderDecisions(data);
+    } catch (error) {
+      var list = q("decisionList");
+      if (list) list.innerHTML = "<div class=\"sub\">决定读取失败：" + esc(error && error.message ? error.message : "接口未就绪") + "</div>";
+    }
+  }
+  var decisionRefresh = q("decisionRefresh");
+  if (decisionRefresh) decisionRefresh.addEventListener("click", function () { loadDecisions(); });
+
   // ---------- status ----------
   function set(id, v) { var el = q(id); if (el) el.textContent = v; }
   function refreshStatus() {
@@ -1138,6 +1313,9 @@
     refreshStatus();
     initCollapsible();
     setInterval(refreshStatus, 15000);
+  // 生活账单/工资单：5 分钟自动刷新一次，切回页面也刷新（发薪后自动切下月）
+  setInterval(function () { if (!document.hidden) loadFinance(); }, 300000);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) loadFinance(); });
   }
   // bridge SDK 由 AstrBot 注入在页面末尾，内联脚本执行时还读不到；
   // 等 DOM 就绪（SDK 已执行）再拉数据，否则首发请求会 401 → 显示「后端未就绪」。

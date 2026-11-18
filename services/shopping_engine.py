@@ -7,9 +7,11 @@ import json
 
 try:
     from ..utils.helpers import stable_int
+    from ..utils.money import idem as idem_key
     from .city import current_city, factor_of
 except ImportError:
     from utils.helpers import stable_int
+    from utils.money import idem as idem_key
     from services.city import current_city, factor_of
 
 try:  # 包模式优先
@@ -75,7 +77,7 @@ async def tick(plugin, now=None):
     for label, base in (("逛街交通", 3000), ("奶茶", 2000), ("逛街午饭", 6000)):
         amount = max(500, int(base * factor))
         try:
-            res = await finance.expense(amount, label, "shop:%s:%s" % (day, label), necessary=False)
+            res = await finance.expense(amount, label, idem_key("shop", day, label), necessary=False)
         except Exception:
             res = {"ok": False}
         if isinstance(res, dict) and res.get("ok"):
@@ -93,7 +95,7 @@ async def tick(plugin, now=None):
         item = {"name": name, "color": color, "category": cat,
                 "time_slot": slot, "price": buy // 100}
         try:
-            repo.meta_set("shop:pending", json.dumps({  # type: ignore[union-attr]
+            repo.meta_set("shop:pending", json.dumps({
                 "name": name, "color": color, "category": cat, "time_slot": slot,
                 "price": buy, "cash": cash, "due": now.timestamp() + 15 * 60,
                 "created": now.timestamp()}, ensure_ascii=False))
@@ -233,7 +235,7 @@ async def handle_reply(plugin, text, now=None):
     if no:
         _clear_pending(repo)
         try:
-            finance.nudge_mood({"委屈": 6, "开心": -5}, "shop:reject:%s" % int(now.timestamp()))
+            finance.nudge_mood({"委屈": 6, "开心": -5}, idem_key("shop:reject", int(now.timestamp())))
             await amo.push_to_owner("好吧，听你的，那不买了……")
         except Exception as exc:
             isolated("shopping_engine.handle_reply", exc)
@@ -248,7 +250,7 @@ async def handle_reply(plugin, text, now=None):
             return {"ok": False, "reason": "insufficient"}
         try:
             res = await finance.expense(buy, "买衣服：%s" % pending.get("name"),
-                                        "shop:pending:%s" % int(pending.get("created") or 0), necessary=True)
+                                        idem_key("shop:pending", int(pending.get("created") or 0)), necessary=True)
         except Exception:
             res = {"ok": False}
         if not isinstance(res, dict) or not res.get("ok"):
@@ -270,7 +272,7 @@ async def handle_reply(plugin, text, now=None):
                                  "price": buy // 100})
             finance.small_diary("老公同意我买%s啦，超开心！" % pending.get("name"))
             await finance.permanent_memory("我买了%s（%s），%d 元。" % (pending.get("name"), pending.get("color"), buy // 100),
-                                           "shop:pending:%s:mem" % int(pending.get("created") or 0))
+                                           idem_key("shop:pending", int(pending.get("created") or 0), "mem"))
             await amo.push_to_owner("谢谢老公！我买啦，等我回家穿给你看~")
         except Exception as exc:
             isolated("shopping_engine.handle_reply.5", exc)
@@ -280,7 +282,7 @@ async def handle_reply(plugin, text, now=None):
             events.append({"due": now.timestamp() + 60 * 60, "kind": "home",
                            "name": pending.get("name"), "color": pending.get("color"),
                            "price": buy // 100, "cash": cash - buy})
-            repo.meta_set("shop:events", json.dumps(events[-20:], ensure_ascii=False))  # type: ignore[union-attr]
+            repo.meta_set("shop:events", json.dumps(events[-20:], ensure_ascii=False))
         except Exception as exc:
             isolated("shopping_engine.handle_reply.6", exc)
         return {"ok": True, "bought": True}

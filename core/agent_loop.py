@@ -25,6 +25,9 @@ except ImportError:  # 按顶层包/单文件加载时
 
 SLOTS = ((9, 30, "morning"), (11, 35, "noon"), (14, 50, "close"))
 CANDIDATES = ("600519", "000001", "300750", "600036")
+#: 午间只复盘：可执行的买卖挂到 14:50，只认当天
+PENDING_KEY = "pending_order"
+TRADE_ACTIONS = ("buy", "sell", "buy_fund", "sell_fund")
 
 
 class FinanceDecision:
@@ -185,7 +188,10 @@ class FinanceDecision:
         if not decision:
             decision = self.decide(cash, positions, float(mood.get("score") or 50), quotes,
                                    random.Random(now.strftime("%Y-%m-%d") + ":" + slot))
+        decision = self._idle_nudge(decision, positions, quotes, cash, slot)
+        decision = self._fund_nudge(decision, slot, cash)
         executed = await self._slot_settle(slot, decision, now)
+        self._update_hold_streak(decision, positions, executed)
         if self.help is not None:
             state = self.help.status()
             if state["low"]:
@@ -451,12 +457,165 @@ class FinanceDecision:
         repo.meta_set("last_insurance_check_date", now.date().isoformat())
         return hint
 
+    def _fund_nudge(self, decision, slot, cash):
+        """收盘时如果基金池有可交易标的、还没有基金持仓，先小额试一笔。"""
+        if slot != "close" or decision.get("action") != "hold":
+            return decision
+        try:
+            if self.repo.positions("fund"):
+                return decision
+        except Exception:
+            return decision
+        codes = [code for code in (getattr(self, "_fund_codes", set()) or set())
+                 if ((getattr(self, "_fund_quotes", {}) or {}).get(code) or {}).get("tradeable")]
+        if not codes or int(cash or 0) < 50000:
+            return decision
+        return {"action": "buy_fund", "code": sorted(codes)[0], "amount_cents": 50000,
+                "reason": "基金池还没碰过，先小额试一笔"}
+
+    def _fund_entry_plan(self, decision, slot):
+        """收盘补一笔 500 元基金首次申购（只要还没有基金持仓；与股票是否成交无关）。"""
+        if slot != "close":
+            return None
+        if decision.get("action") in ("buy_fund", "sell_fund", "fund_outage"):
+            return None
+        try:
+            cash = int(self.finance.balance_cents() or 0)
+        except Exception as exc:
+            isolated("finance.fund.entry.cash", exc)
+            return None
+        plan = self._fund_nudge({"action": "hold"}, "close", cash)
+        return plan if plan.get("action") == "buy_fund" else None
+
+    async def _record_fund_entry(self, plan, executed, now):
+        """基金 500 兜底是收盘的第二笔；单独记进 last_decision.fund_entry，不覆盖股票决策。"""
+        try:
+            payload = json.loads(self.repo.meta_get("last_decision") or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        payload["fund_entry"] = {
+            "code": plan.get("code"), "amount_cents": int(plan.get("amount_cents") or 0),
+            "executed": bool(executed.get("ok")),
+        }
+        if executed.get("message"):
+            payload["fund_entry"]["message"] = str(executed.get("message"))
+        try:
+            self.repo.meta_set("last_decision", json.dumps(payload, ensure_ascii=False))
+        except Exception as exc:
+            isolated("finance.fund.entry.meta", exc)
+
+    def _idle_nudge(self, decision, positions, quotes, cash, slot):
+        """空仓连续 2 次 hold 后，下一笔优先小仓位试买，避免永远空仓。"""
+        if slot == "noon" or positions or decision.get("action") != "hold":
+            return decision
+        try:
+            streak = int(self.repo.meta_get("hold_streak", 0) or 0)
+        except Exception:
+            return decision
+        if streak < 2 or self.pools is None:
+            return decision
+        try:
+            codes = sorted(self.pools.affordable(quotes, cash) or [])
+        except Exception:
+            return decision
+        if not codes:
+            return decision
+        return {"action": "buy", "code": codes[0], "qty": 100,
+                "reason": "空仓观望好几天了，先小仓位试一笔"}
+
+    # ---------- 午间挂单：11:35 只复盘，买卖排到 14:50 ----------
+    def _is_trade(self, decision):
+        """带代码、数量合法的买卖才算可挂单；hold / 存款 / 发消息都不挂。"""
+        if not isinstance(decision, dict):
+            return False
+        action = str(decision.get("action") or "")
+        if action not in TRADE_ACTIONS or not str(decision.get("code") or "").strip():
+            return False
+        try:
+            if action in ("buy", "sell"):
+                return int(float(decision.get("qty") or 0)) > 0
+            if action == "buy_fund":
+                return int(decision.get("amount_cents") or 0) > 0
+            return float(decision.get("shares") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _queue_pending(self, decision, now):
+        """午间把可执行决定写成当天挂单；午间不是买卖就清掉旧挂单。"""
+        try:
+            if not self._is_trade(decision):
+                self.repo.meta_set(PENDING_KEY, "")
+                return None
+            plan = {
+                "day": now.date().isoformat(), "slot": "noon",
+                "queued_at": now.strftime("%H:%M"),
+                "action": str(decision.get("action")),
+                "code": str(decision.get("code")),
+                "qty": int(float(decision.get("qty") or 0)),
+                "amount_cents": int(decision.get("amount_cents") or 0),
+                "shares": float(decision.get("shares") or 0),
+                "reason": str(decision.get("reason") or ""),
+            }
+            self.repo.meta_set(PENDING_KEY, json.dumps(plan, ensure_ascii=False))
+            return plan
+        except Exception as exc:
+            isolated("finance.pending.queue", exc)
+            return None
+
+    def _take_pending(self, now):
+        """取出当天挂单；隔天、损坏、非买卖一律清掉，绝不隔日补成交。"""
+        try:
+            raw = self.repo.meta_get(PENDING_KEY) or ""
+        except Exception as exc:
+            isolated("finance.pending.read", exc)
+            return None
+        if not raw:
+            return None
+        try:
+            self.repo.meta_set(PENDING_KEY, "")
+        except Exception as exc:
+            isolated("finance.pending.clear", exc)
+        try:
+            plan = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(plan, dict):
+            return None
+        if str(plan.get("day") or "") != now.date().isoformat():
+            return None
+        return plan if self._is_trade(plan) else None
+
+    def _update_hold_streak(self, decision, positions, executed):
+        """空仓连续 hold 才累计；挂单成交也算「动过」，要清零。"""
+        try:
+            held = (decision.get("action") == "hold" and not positions
+                    and not executed.get("ok"))
+            streak = int(self.repo.meta_get("hold_streak", 0) or 0)
+            self.repo.meta_set("hold_streak", str(streak + 1) if held else "0")
+        except Exception as exc:
+            isolated("finance.hold_streak", exc)
+
     async def _slot_settle(self, slot, decision, now):
-        """执行记录：非午间才成交，随后写决策记录。"""
-        executed = {"ok": False, "message": "只复盘，不成交"}
-        if slot != "noon":
-            executed = await self._execute(slot, decision, now)
-        await self._record(slot, decision, executed, now)
+        """执行记录：午间只复盘并挂单；收盘先做自己的决定，hold 时补挂单。"""
+        if slot == "noon":
+            executed = {"ok": False, "message": "只复盘，不成交"}
+            queued = self._queue_pending(decision, now)
+            await self._record(slot, decision, executed, now, pending=bool(queued))
+            return executed
+        executed = await self._execute(slot, decision, now)
+        from_pending = False
+        if slot == "close":
+            plan = self._take_pending(now)
+            if plan is not None and not self._is_trade(decision):
+                decision = dict(plan)
+                executed = await self._execute(slot, decision, now)
+                from_pending = True
+        await self._record(slot, decision, executed, now, from_pending=from_pending)
+        if slot == "close":
+            fund_plan = self._fund_entry_plan(decision, slot)
+            if fund_plan is not None:
+                fund_exec = await self._execute(slot, fund_plan, now)
+                await self._record_fund_entry(fund_plan, fund_exec, now)
         return executed
 
     async def _execute(self, slot, decision, now):
@@ -507,7 +666,7 @@ class FinanceDecision:
             return await self.trading.sell(decision["code"], decision["qty"], None, idem + ":sell")
         return {"ok": False, "message": "决定先不动"}
 
-    async def _record(self, slot, decision, executed, now):
+    async def _record(self, slot, decision, executed, now, pending=False, from_pending=False):
         mood = self.finance.mood()
         when = now.strftime("%Y-%m-%d %H:%M")
         if decision.get("action") in ("buy_fund", "sell_fund"):
@@ -520,12 +679,22 @@ class FinanceDecision:
             line = "%s 决策：%s" % (when, decision["reason"])
             if executed.get("ok"):
                 line += "；%s" % executed.get("message", "")
+        payload = {
+            "slot": slot, "action": decision.get("action"), "code": decision.get("code"),
+            "reason": decision.get("reason"), "at": now.strftime("%m-%d %H:%M"),
+            "executed": bool(executed.get("ok")),
+        }
+        for key in ("qty", "amount_cents", "shares"):
+            if decision.get(key) not in (None, "", 0):
+                payload[key] = decision.get(key)
+        if executed.get("message"):
+            payload["message"] = str(executed.get("message"))
+        if pending:
+            payload["pending"] = True
+        if from_pending:
+            payload["from_pending"] = True
         try:
-            self.repo.meta_set("last_decision", json.dumps({
-                "slot": slot, "action": decision.get("action"), "code": decision.get("code"),
-                "reason": decision.get("reason"), "at": now.strftime("%m-%d %H:%M"),
-                "executed": bool(executed.get("ok")),
-            }, ensure_ascii=False))
+            self.repo.meta_set("last_decision", json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             isolated("finance.decision.meta", exc)
         await self.finance.memory.remember(line, kind="finance_decision",

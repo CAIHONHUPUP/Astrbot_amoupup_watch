@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 logger = logging.getLogger("watch.social")
 
-ROSTER = (
+ROSTER: tuple[dict[str, Any], ...] = (
     {"name": "柳如烟", "circle": "friend", "relation": "闺蜜", "affinity": 88},
     {"name": "白凝冰", "circle": "friend", "relation": "死党", "affinity": 80},
     {"name": "季博达", "circle": "work", "relation": "直属领导", "affinity": 45},
@@ -170,3 +171,22 @@ def sanitize(text, npc=""):
 
 def roster_hint():
     return ROSTER_LINE
+
+
+# ---------------------------------------------------------------- 名册/状态唯一入口
+#: Phase 14：名册与 NPC 状态都归 npc_roster 管；social_engine 只调这里，
+#: npc_status 退化成实现细节（状态池 + 7-14 天刷新）。
+def refresh_status(repo, now=None):
+    try:
+        from . import npc_status
+    except ImportError:  # 按顶层包/单文件加载时
+        import npc_status
+    return npc_status.refresh(repo, now)
+
+
+def status_map(repo):
+    try:
+        from . import npc_status
+    except ImportError:  # 按顶层包/单文件加载时
+        import npc_status
+    return npc_status.status_map(repo)

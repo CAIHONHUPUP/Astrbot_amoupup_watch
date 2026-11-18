@@ -156,6 +156,7 @@ async def finance_tick(plugin):
         if plugin.work_events is not None:
             await plugin._guard_step("work_random", plugin.work_events.daily_random(_dt.datetime.now()))
             await plugin._guard_step("work_recap", plugin.work_events.daily_recap(_dt.datetime.now()))
+            await plugin._guard_step("work_amo_sick", plugin.work_events.sync_amo_sick(_dt.datetime.now()))
             try:
                 if any("加班" in str(e) for e in (plugin.work_events.today_events() or [])):
                     amo = plugin.finance._amo() if hasattr(plugin.finance, "_amo") else None
@@ -167,6 +168,7 @@ async def finance_tick(plugin):
         await plugin._guard_step("fortune", plugin.fortune.monthly_roll(_dt.datetime.now()))
         await plugin._guard_step("lending", plugin.lending.repay_tick(_dt.datetime.now()))
         await plugin._guard_step("medical", plugin.medical.insurance_tick(_dt.datetime.now()))
+        await plugin._guard_step("hospital_visit", plugin.medical.charge_schedule_visit())
         try:
             from ..services.bankruptcy_engine import build_bankruptcy
         except ImportError:

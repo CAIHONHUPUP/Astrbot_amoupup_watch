@@ -14,15 +14,10 @@ sys.path.insert(0, ROOT)
 from services import shopping_engine as shop  # noqa: E402
 
 
-class FakeRepo:
-    def __init__(self):
-        self.data = {}
-
-    def meta_get(self, key, default=None):
-        return self.data.get(key, default)
-
-    def meta_set(self, key, value):
-        self.data[key] = value
+try:  # Phase 15：meta 桩改用 tests/fixtures.py 的共享实现（断言不变）
+    from tests.fixtures import FakeRepo  # noqa: E402
+except ImportError:
+    from fixtures import FakeRepo  # noqa: E402
 
 
 class FakeAmo:

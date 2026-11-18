@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import re
 
+try:  # Phase 15：分 → 整数元的口径统一走 utils.money
+    from .money import to_yuan_int
+except ImportError:  # 顶层模块模式
+    from money import to_yuan_int
+
 _CN = "零一二三四五六七八九"
 
 
@@ -21,7 +26,7 @@ def _cn(n):
 def human_money(cents):
     """27522 分 → 「两百多」；35707 分 → 「三百多」；8000 → 「八十多」。"""
     try:
-        yuan = int(round(int(cents) / 100.0))
+        yuan = to_yuan_int(cents)
     except (TypeError, ValueError):
         return "一些钱"
     if yuan <= 0:

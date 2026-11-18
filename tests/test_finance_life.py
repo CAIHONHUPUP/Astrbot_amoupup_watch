@@ -5,8 +5,11 @@ import datetime as dt
 import pytest
 
 from services.life_engine import DEFAULT_SALARY_CENTS, FinanceLife
-from models.ledger import FinanceRepo
-from models.db import Store
+
+try:  # Phase 15：tmp_path 真库改走共享 fixtures（跑完随 tmp_path 清理）
+    from tests.fixtures import temp_store
+except ImportError:
+    from fixtures import temp_store
 
 
 class FakeFinance:
@@ -29,9 +32,7 @@ class FakeFinance:
 
 @pytest.fixture()
 def env(tmp_path):
-    store = Store(root=tmp_path / "d", min_free_mb=0)
-    store.init()
-    repo = FinanceRepo(store)
+    store, repo = temp_store(tmp_path)
     finance = FakeFinance()
     life = FinanceLife(None, repo, finance)
     yield life, repo, finance, store

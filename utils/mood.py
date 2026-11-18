@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import hashlib
 
+try:  # Phase 15：千分位金额也走 utils.money 的唯一实现
+    from .money import fmt_yuan_grouped as yuan
+except ImportError:  # 顶层模块模式
+    from money import fmt_yuan_grouped as yuan
+
 #: amo 十维心情（amo_shared.py MOOD_KEYS）；只写这几个键
 POSITIVE = ("开心", "兴奋")
 NEGATIVE = ("郁闷", "委屈", "焦虑")
@@ -50,10 +55,6 @@ def word_for_score(score: float) -> str:
     if score >= 20:
         return "难过、委屈"
     return "崩溃、伤心，呜呜呜"
-
-
-def yuan(cents: int) -> str:
-    return "¥%s" % format(int(cents) / 100.0, ",.2f")
 
 
 def _level(word, **deltas):

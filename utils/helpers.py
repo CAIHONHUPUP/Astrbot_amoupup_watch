@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
-from decimal import Decimal, ROUND_HALF_UP
+
+try:  # 包模式（from ..utils.helpers import cents）
+    from .money import cents, round_cents, to_yuan, yuan
+    from .money import QUANT  # noqa: F401  (兼容旧的 Decimal 量化常量引用)
+except ImportError:  # 顶层模块模式（sys.path 里有 utils/）
+    from money import cents, round_cents, to_yuan, yuan
+    from money import QUANT  # noqa: F401
 
 # ---------- 城市等级与物价系数 ----------
 CITY_TIER_FACTOR = {"一线": 1.5, "二线": 1.0, "三线": 0.75}
@@ -73,22 +79,9 @@ def car_price_cents(city=None):
 
 
 # ---------- 金额（分） ----------
-def cents(value):
-    """元 → 分（十进制四舍五入，避免 12.345*100=1234.4999… 这种浮点误差）。"""
-    amount = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    return int(amount * 100)
-
-
-def round_cents(value):
-    return int(round(float(value)))
-
-
-def to_yuan(value_cents):
-    return int(round(value_cents)) / 100.0
-
-
-def yuan(value_cents):
-    return "¥%.2f" % (int(round(value_cents)) / 100.0)
+#: Phase 15：金额的唯一实现在 utils/money.py。这里已改为 re-export，
+#: 旧名字（cents / round_cents / to_yuan / yuan）保持可用、行为逐字节不变，
+#: 业务代码一律 import utils.money（或继续用这里的旧名字）。
 
 
 # ---------- 日期 ----------

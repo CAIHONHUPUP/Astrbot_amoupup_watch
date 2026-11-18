@@ -17,6 +17,11 @@ try:
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
 
+try:  # Phase 15：金额格式化/幂等键唯一实现
+    from ..utils.money import fmt_yuan, idem as idem_key
+except ImportError:  # 按顶层包/单文件加载时
+    from utils.money import fmt_yuan, idem as idem_key
+
 #: 分类顺序（面板按这个顺序展示）
 CATEGORY_ORDER = ("food", "transport", "daily", "social", "impulse", "medical")
 CATEGORY_LABELS = {
@@ -112,7 +117,7 @@ class FinanceExpense:
         amount = int(amount_cents)
         if amount <= 0:
             return {"ok": False, "reason": "zero"}
-        key = str(idem or ("spend:%s:%s:%d" % (day_text, label, amount)))
+        key = str(idem or idem_key("spend", day_text, label, amount))
         result = await self.finance.expense(amount, label, key, necessary=necessary, quiet=True)
         if not result.get("ok"):
             return {"ok": False, "reason": result.get("reason") or "insufficient", "label": label}
@@ -120,7 +125,7 @@ class FinanceExpense:
         deltas = self._mood_for(category, amount)
         if deltas:
             try:
-                self.finance.nudge_mood(deltas, key + ":mood")
+                self.finance.nudge_mood(deltas, idem_key(key, "mood"))
             except Exception as exc:
                 isolated("expense.mood", exc)
         return {"ok": True, "label": label, "amount_cents": amount, "category": category}
@@ -142,10 +147,10 @@ class FinanceExpense:
             if not summary["total_cents"]:
                 self.repo.meta_set(flag, "empty")
                 continue
-            parts = ["%s %s" % (item["label"], "¥%.2f" % (item["amount_cents"] / 100.0))
+            parts = ["%s %s" % (item["label"], fmt_yuan(item["amount_cents"]))
                      for item in summary["categories"] if item["amount_cents"]]
-            text = "%s 日常开销：%s，合计 ¥%.2f。" % (
-                day.strftime("%m-%d"), "，".join(parts), summary["total_cents"] / 100.0)
+            text = "%s 日常开销：%s，合计 %s。" % (
+                day.strftime("%m-%d"), "，".join(parts), fmt_yuan(summary["total_cents"]))
             try:
                 await self.finance.long_memory(text, "expense_day:" + day.isoformat())
                 self.repo.meta_set(flag, "1")

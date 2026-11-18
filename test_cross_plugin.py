@@ -1,3 +1,4 @@
+from typing import Any, TYPE_CHECKING
 # -*- coding: utf-8 -*-
 """test_cross_plugin.py：Mock 陪伴/记忆/amo，验证三条跨插件链路。"""
 import asyncio, datetime as dt
@@ -13,10 +14,12 @@ import tempfile, shutil
 class Wallet:
     def __init__(self, c=0): self.c = c
     def balance(self, account="cash"): return self.c
-    def debit(self, n, r, i):
+    def debit(self, n, r, i, **kwargs):
+        # 真实 amo Wallet.debit 还接受 ref/account/category/sub_category/item_name/
+        # trigger_reason/actor/fund_source；mock 只拒绝未知位置参数，关键词直接忽略。
         if n > self.c: return False
         self.c -= n; return True
-    def credit(self, n, r, i): self.c += n; return True
+    def credit(self, n, r, i, **kwargs): self.c += n; return True
 
 
 class Amo:
@@ -41,8 +44,16 @@ class Amo:
     def finance_recall(self, query, limit=5): return []
 
 
+    if TYPE_CHECKING:  # 宿主成员（插件主类/其它 mixin 提供）：严格口径用声明而不是 ignore
+        context: Any
+        finance: Any
+        finance_repo: Any
 class Plugin:
-    config = {}
+    if TYPE_CHECKING:  # 宿主成员（插件主类/其它 mixin 提供）：严格口径用声明而不是 ignore
+        context: Any
+        finance: Any
+        finance_repo: Any
+    config: dict = {}
 
 def make(cash=1000000):
     tmp = tempfile.mkdtemp(prefix="cp-")

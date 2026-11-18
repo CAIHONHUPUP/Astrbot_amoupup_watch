@@ -69,5 +69,5 @@ def fetch_quotes(codes):
             last_exc = exc
             if attempt == 0:
                 time.sleep(0.2)
-    isolated("finance.market.fetch", last_exc)  # type: ignore[arg-type]
+    isolated("finance.market.fetch", last_exc)
     return {}

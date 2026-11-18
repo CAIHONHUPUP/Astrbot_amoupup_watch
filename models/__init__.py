@@ -3,9 +3,14 @@
 from .db import Store
 from .ledger import FinanceRepo
 
+from typing import Any
+
+_MemoryIndex: Any = None
 try:
-    from .memory import MemoryIndex
-except Exception:  # 可选模块
-    MemoryIndex = None
+    from .memory import MemoryIndex as _MemoryIndex
+except ImportError:  # 可选模块，缺了也不影响主流程
+    _MemoryIndex = None
+
+MemoryIndex: Any = _MemoryIndex
 
 __all__ = ["Store", "FinanceRepo", "MemoryIndex"]

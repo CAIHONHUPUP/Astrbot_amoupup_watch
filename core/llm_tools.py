@@ -1,3 +1,4 @@
+from typing import Any
 import logging
 logger = logging.getLogger("amo.watch")
 # -*- coding: utf-8 -*-
@@ -18,12 +19,12 @@ async def buy_insurance_tool(plugin, insurance_type=""):
         return "支持的险种：e生保 / 医无忧 / 金钟罩（意外险）/ 重疾险 / 交强险 / 商业车险 / 家财险"
     # 车/房状态在 finance_property.state() 里；plugin 上没有 has_car/has_house 字段
     prop = getattr(plugin, "finance_property", None)
-    info = {}
+    info: dict[str, Any] = {}
     if prop is not None and callable(getattr(prop, "state", None)):
         try:
             info = prop.state() or {}
         except Exception:
-            info = {}
+            info: dict[str, Any] = {}
     has_car = bool(info.get("has_car", getattr(plugin, "has_car", False)))
     has_house = bool(info.get("has_house", getattr(plugin, "has_house", False)))
     if key in ("交强险", "商车险") and not has_car:

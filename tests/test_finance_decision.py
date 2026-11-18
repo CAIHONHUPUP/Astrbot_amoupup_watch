@@ -11,34 +11,7 @@ from services.credit_engine import FinanceHelp, amortization
 from models.ledger import FinanceRepo
 from models.db import Store
 
-
-class FakeFinance:
-    def __init__(self):
-        self.cash = 1_000_000
-        self.calls = []
-
-    def balance_cents(self):
-        return self.cash
-
-    async def expense(self, cents, reason, idem, necessary=False, quiet=False):
-        self.cash -= cents
-        self.calls.append(("expense", cents, reason))
-        return {"ok": True, "mood": "平静"}
-
-    async def income(self, cents, reason, idem, salary=False):
-        self.cash += cents
-        self.calls.append(("income", cents, reason))
-        return {"ok": True, "mood": "开心"}
-
-    async def borrow(self, cents, reason, idem, months=12):
-        self.cash += cents
-        self.calls.append(("borrow", cents, reason))
-        return {"ok": True}
-
-    async def remember_event(self, kind, cents, text, idem):
-        self.calls.append(("remember", text))
-        return True
-
+from plugin_fakes import FinanceDecisionFakeFinance as FakeFinance  # noqa: E402
 
 @pytest.fixture()
 def env(tmp_path):
@@ -49,14 +22,12 @@ def env(tmp_path):
     yield repo, finance, store
     store.close()
 
-
 def test_amortization_sums_principal():
     payment, total_interest, rows = amortization(1200000, 12, 0.06)
     assert len(rows) == 12
     assert sum(r["principal"] for r in rows) == 1200000
     assert total_interest > 0
     assert rows[0]["payment"] == payment
-
 
 def test_loan_creates_installments_and_closes_episode(env):
     repo, finance, _ = env
@@ -71,7 +42,6 @@ def test_loan_creates_installments_and_closes_episode(env):
     assert repo.meta_get("lowfund_choice") == "loan"
     assert asyncio.run(help_.user_transfer(10000))["ok"] is False
 
-
 def test_repay_tick_pays_due_installment(env):
     repo, finance, _ = env
     help_ = FinanceHelp(None, repo, finance)
@@ -85,7 +55,6 @@ def test_repay_tick_pays_due_installment(env):
     assert finance.cash < before
     assert int(repo.loans()[0]["balance_cents"]) < 120000
 
-
 def test_consume_item_records_each_item(env):
     repo, finance, _ = env
     consume = FinanceConsume(None, repo, finance)
@@ -94,7 +63,6 @@ def test_consume_item_records_each_item(env):
     assert finance.calls[-1] == ("expense", 1200, "肠粉 × 2")
     asyncio.run(consume.buy_items([{"item": "豆浆", "qty": 1}, {"item": "包子", "qty": 2}]))
     assert len([c for c in finance.calls if c[0] == "expense"]) == 3
-
 
 def test_decision_variety():
     engine = FinanceDecision(None, None, None, None, None, None)

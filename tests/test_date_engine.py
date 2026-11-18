@@ -161,6 +161,15 @@ class DateEngineTests(unittest.TestCase):
         self.assertTrue(any(day == "2026-11-14" and "和老公" in (item.get("activity") or "")
                             for day, item in plugin.finance.amo.state.items))
 
+    def test_attend_keeps_face_to_face_on_date_day(self):
+        """B 方案：约会当天仍然面对面，不被收尾的「各回各家」误杀。"""
+        plugin = FakePlugin(cash=50000)
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.attend_date(plugin, "火锅", now=NOW))
+        line = plugin.finance.amo.date_now[-1][0]
+        self.assertIn("站在你身边", line)
+        self.assertIn("坐在你对面", line)
+
     def test_attend_her_treat_missing_fund(self):
         plugin = FakePlugin(cash=50000)
         asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))

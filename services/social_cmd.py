@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """社交指令：/查关系、/劝她别借钱给X、/社交 <事件名>。"""
 from __future__ import annotations
+from typing import Any
 
 try:
     from ..guard import isolated
@@ -68,12 +69,12 @@ async def social_reply(plugin, text):
         if key is None:
             return "支持的险种：e生保 / 医无忧 / 金钟罩（意外险）/ 重疾险 / 交强险 / 商业车险 / 家财险"
         prop = getattr(plugin, "finance_property", None)
-        info = {}
+        info: dict[str, Any] = {}
         if prop is not None and callable(getattr(prop, "state", None)):
             try:
                 info = prop.state() or {}
             except Exception:
-                info = {}
+                info: dict[str, Any] = {}
         has_car = bool(info.get("has_car", getattr(plugin, "has_car", False)))
         has_house = bool(info.get("has_house", getattr(plugin, "has_house", False)))
         if key in ("交强险", "商车险") and not has_car:
@@ -107,7 +108,7 @@ async def social_reply(plugin, text):
         fn = table.get(arg)
         if fn is None:
             return "可选：/外出 父母、/外出 逛街、/外出 旅游"
-        result = await fn()  # type: ignore[operator]
+        result = await fn()
         return result.get("text") or ("没去成（%s）" % result.get("reason"))
     if text.startswith(("/赞助", "赞助")):
         try:
@@ -131,7 +132,7 @@ async def social_reply(plugin, text):
         fn = table.get(arg)
         if fn is None:
             return "没这个事件，可选：随礼 / 红包 / 聚餐 / 借钱 / 批评"
-        result = await fn()  # type: ignore[operator]
+        result = await fn()
         return result.get("text") or ("好了" if result.get("ok") else "这次没触发（%s）" % result.get("reason"))
     return ""
 

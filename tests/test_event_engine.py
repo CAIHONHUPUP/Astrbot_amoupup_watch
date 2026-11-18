@@ -2,12 +2,24 @@
 import asyncio, datetime as dt
 from services.event_engine import EventEngine
 
-class Repo:
-    def __init__(self): self.meta, self.tasks = {}, {}
-    def meta_get(self, k, d=None): return self.meta.get(k, d)
-    def meta_set(self, k, v): self.meta[k] = v
-    def task_done(self, k): return k in self.tasks
-    def mark_task(self, k, n=""): self.tasks[k] = 1
+try:  # Phase 15：meta 桩用共享实现，任务表留在本文件
+    from tests.fixtures import FakeRepo  # noqa: E402
+except ImportError:
+    from fixtures import FakeRepo  # noqa: E402
+
+
+class Repo(FakeRepo):
+    """meta 走共享桩；任务表是本用例自己的。"""
+
+    def __init__(self):
+        super().__init__()
+        self.tasks = {}
+
+    def task_done(self, k):
+        return k in self.tasks
+
+    def mark_task(self, k, n=""):
+        self.tasks[k] = 1
 class Fin:
     def __init__(self, cash=500000): self.cash, self.diaries, self.moods = cash, [], []
     def balance_cents(self): return self.cash

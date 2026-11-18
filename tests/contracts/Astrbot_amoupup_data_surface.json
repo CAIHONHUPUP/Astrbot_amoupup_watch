@@ -7,5 +7,6 @@
   "nightly_memory_candidates": [
     "hours",
     "limit"
-  ]
+  ],
+  "protocol_info": []
 }

@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""熬夜的财务/职场后果：夜宵冲动、迟到罚款、转账哄睡清空惩罚。"""
+"""熬夜的财务/职场后果：宵夜决定、迟到罚款、转账哄睡清空惩罚。
+
+2026-11-17 收口：宵夜的决定/日程块/扣款/日记/主动消息全部在 amo_food_event
+（amo 的 late_snack_tick 单一入口），守护这里不再自己拼 schedule/ledger/日记，
+只负责触发并把结果带出去。迟到罚款与哄睡仍属守护侧财务行为。
+"""
 from __future__ import annotations
 
 import logging
@@ -12,12 +17,30 @@ try:
 except ImportError:
     from utils.helpers import stable_int
 
-SNACKS = ("烧烤", "泡面", "炸鸡", "小蛋糕")
+try:
+    from ..core.amo_bridge import AmoBridge
+except ImportError:
+    from core.amo_bridge import AmoBridge
 
 
 def _amo(plugin):
     finance = getattr(plugin, "finance", None)
     return finance._amo() if finance is not None and hasattr(finance, "_amo") else None
+
+
+async def _late_snack(plugin, finance, now):
+    """调 amo 单一入口；只把决定/块/扣款结果带出去，不在这里做任何领域判断。"""
+    bridge = AmoBridge(plugin, finance=finance)
+    result = await bridge.call_async("late_snack_tick", now=now)
+    if not result.ok or not isinstance(result.value, dict):
+        return {}
+    info = result.value
+    out = {"snack_decision": "eat" if info.get("eat") else str(info.get("skipped") or "skip")}
+    if info.get("charged"):
+        out["snack"] = int(info.get("charged") or 0)
+    if info.get("block_id"):
+        out["snack_block"] = str(info.get("block_id"))
+    return out
 
 
 async def tick(plugin, now=None):
@@ -28,46 +51,23 @@ async def tick(plugin, now=None):
     if amo is None or finance is None or not hasattr(amo, "late_night_state"):
         return None
     try:
+        from .health_bridge import is_sick
+    except ImportError:
+        from services.health_bridge import is_sick
+    if is_sick(amo):
+        return None  # 生病不熬夜、不吃宵夜、不记迟到罚款
+    try:
         state = amo.late_night_state() or {}
     except Exception:
         return None
     out = {}
-    # 夜宵只在 22:00-24:00：00:00-06:00 只允许失眠/起夜/喝水，禁止消费
-    late_snack = 22 <= now.hour < 24
-    if state.get("active") and late_snack:
-        key = "late_snack:%s:%02d" % (now.date().isoformat(), now.hour)
+    # 宵夜窗口（22:00-06:00）和「0-6 不主动说话」都由 amo 领域入口判；
+    # 这里只在窗口内触发，避免白天每个 tick 都跨插件调用。
+    if state.get("active") and (22 <= now.hour < 24 or 0 <= now.hour < 6):
         try:
-            done = repo.meta_get(key, False) if repo is not None else False
-        except Exception:
-            done = False
-        if not done:
-            try:
-                hunger = float(amo.get_hunger())
-            except Exception:
-                hunger = 100.0
-            cash = int(finance.balance_cents() or 0)
-            if hunger < 40 and cash >= 2000:
-                food = SNACKS[stable_int(key, 0, len(SNACKS))]
-                amount = 2000 + stable_int(key + ":m", 0, 3000)
-                try:
-                    res = await finance.expense(amount, "夜宵：%s" % food, "late:" + key, necessary=True)
-                except Exception:
-                    res = {"ok": False}
-                if isinstance(res, dict) and res.get("ok"):
-                    try:
-                        amo.add_hunger("amo", 15)
-                        amo.note_late_snack(amount, food)
-                    except Exception as exc:
-                        logger.debug("[WATCH] optional step failed: %r", exc)
-                    try:
-                        finance.small_diary("今天熬夜看盘，肚子饿得咕咕叫，没忍住点了份%s，花了%d块，呜呜。" % (food, amount // 100))
-                    except Exception as exc:
-                        logger.debug("[WATCH] optional step failed: %r", exc)
-                try:
-                    repo.meta_set(key, "1")  # type: ignore[union-attr]
-                except Exception as exc:
-                    logger.debug("[WATCH] optional step failed: %r", exc)
-                out["snack"] = amount
+            out.update(await _late_snack(plugin, finance, now))
+        except Exception as exc:
+            logger.debug("[WATCH] late_snack_tick failed: %r", exc)
     # 第二天迟到：工作日、熬夜未哄睡、60% 概率
     if state.get("late_yesterday") and not state.get("cleared") and now.weekday() < 5:
         try:
@@ -77,6 +77,7 @@ async def tick(plugin, now=None):
         if not fined and not state.get("fined"):
             if stable_int(now.date().isoformat(), 0, 100) < 60:
                 fine = 5000 + stable_int(now.date().isoformat() + ":f", 0, 5000)
+                # 非宵夜路径：迟到罚款仍属守护侧财务；宵夜扣款只在 amo late_snack_tick。
                 try:
                     res = await finance.expense(fine, "迟到罚款", "late-fine:" + now.date().isoformat(), necessary=True)
                 except Exception:
@@ -89,7 +90,7 @@ async def tick(plugin, now=None):
                         logger.debug("[WATCH] optional step failed: %r", exc)
                     out["fine"] = fine
             try:
-                repo.meta_set("late_fine:" + now.date().isoformat(), "1")  # type: ignore[union-attr]
+                repo.meta_set("late_fine:" + now.date().isoformat(), "1")
             except Exception as exc:
                 logger.debug("[WATCH] optional step failed: %r", exc)
     return out

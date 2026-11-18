@@ -16,12 +16,18 @@
   "balance": [
     "account"
   ],
+  "cancel_date_session": [
+    "now",
+    "reason"
+  ],
   "chat_raw": [
     "contexts",
     "prompt",
     "system",
     "umo"
   ],
+  "clear_date_ending": [],
+  "clear_date_pause": [],
   "commit_schedule_change": [
     "day",
     "invalidate_from",
@@ -34,17 +40,25 @@
     "account",
     "actor",
     "amount_cents",
+    "event_id",
     "fund_source",
     "idem",
     "reason",
     "ref"
   ],
   "current_activity": [],
+  "date_ending": [
+    "now"
+  ],
+  "date_session": [
+    "now"
+  ],
   "debit": [
     "account",
     "actor",
     "amount_cents",
     "category",
+    "event_id",
     "fund_source",
     "idem",
     "item_name",
@@ -55,7 +69,8 @@
   ],
   "finance_recall": [
     "limit",
-    "query"
+    "query",
+    "tags"
   ],
   "finance_remember": [
     "content",
@@ -63,8 +78,10 @@
     "kind",
     "tier"
   ],
-  "get_hunger": [
-    "target"
+  "finish_date_session": [
+    "now",
+    "reason",
+    "title"
   ],
   "get_schedule": [
     "day"
@@ -73,6 +90,9 @@
     "message"
   ],
   "hunger_state": [],
+  "is_dating": [
+    "now"
+  ],
   "kv_get": [
     "default",
     "key"
@@ -82,6 +102,15 @@
     "value"
   ],
   "late_night_state": [],
+  "late_snack_decisions": [
+    "days",
+    "limit"
+  ],
+  "late_snack_tick": [
+    "now",
+    "roll",
+    "say"
+  ],
   "ledger": [
     "limit"
   ],
@@ -100,10 +129,6 @@
   "note_late_fine": [
     "amount_cents"
   ],
-  "note_late_snack": [
-    "amount_cents",
-    "food"
-  ],
   "note_purchase": [
     "name",
     "price_cents"
@@ -118,6 +143,7 @@
   "nudge": [],
   "on_big_stock_loss": [],
   "on_forced_overtime": [],
+  "protocol_info": [],
   "push_to_owner": [
     "text"
   ],
@@ -125,6 +151,7 @@
   "save_diary": [
     "day",
     "hour",
+    "start",
     "status",
     "text",
     "version"
@@ -136,9 +163,18 @@
     "until_ts",
     "zone"
   ],
+  "set_date_ending": [
+    "fact",
+    "reason",
+    "ttl"
+  ],
   "set_date_fact": [
     "line",
     "until_ts"
+  ],
+  "set_date_home": [
+    "at",
+    "title"
   ],
   "set_date_incident": [
     "text",
@@ -158,9 +194,21 @@
     "since",
     "until_ts"
   ],
+  "set_date_pause": [
+    "minutes"
+  ],
   "set_date_prep": [
     "activity",
     "start_ts"
+  ],
+  "set_date_separation": [
+    "ended_ts",
+    "title"
+  ],
+  "set_last_date_event": [
+    "activity",
+    "ended_ts",
+    "hours"
   ],
   "shopping_trigger": [
     "now"

@@ -18,15 +18,28 @@ import time
 import uuid
 
 try:
+    from ..core.amo_bridge import AmoBridge
     from ..guard import isolated
-    from ..utils.helpers import is_holiday, stable_int
+    from ..utils.helpers import stable_int
     from ..utils.humanize import human_money, humanize_numbers
-    from . import npc_roster, npc_status
+    from . import npc_roster
+    from .social_rules import (INVITE_TTL_HOURS, INVITE_WINDOW, MAX_PER_DAY, MIN_GAP_HOURS,
+                               PENDING, can_invite_decision, common_sense, day_label,
+                               find_free_day, invite_idem, invite_status, is_off_day,
+                               live_invite, minutes, parse_when, relative_label,
+                               retime_ask, same_invite)
 except ImportError:  # 按顶层包/单文件加载时
+    from core.amo_bridge import AmoBridge
     from guard import isolated
-    from utils.helpers import is_holiday, stable_int
+    from utils.helpers import stable_int
     from utils.humanize import human_money, humanize_numbers
-    from services import npc_roster, npc_status
+    from services import npc_roster
+    from services.social_rules import (INVITE_TTL_HOURS, INVITE_WINDOW, MAX_PER_DAY,
+                                       MIN_GAP_HOURS, PENDING, can_invite_decision,
+                                       common_sense, day_label, find_free_day,
+                                       invite_idem, invite_status, is_off_day,
+                                       live_invite, minutes, parse_when, relative_label,
+                                       retime_ask, same_invite)
 
 #: 唯一合法的 7 个核心 NPC
 SEED = tuple((item["name"], item["circle"], item["relation"], item["affinity"])
@@ -71,6 +84,18 @@ def is_social_kind(kind):
     return k.startswith(SOCIAL_KIND_PREFIX) and k != "social:status"
 
 
+def _watch_dating(plugin):
+    """能陪未就绪时的兜底：守护自己记的赴约状态（同一事实，别判丢）。"""
+    try:
+        try:
+            from . import date_engine
+        except ImportError:  # 按顶层包/单文件加载时
+            import date_engine
+        return bool(date_engine.active_date(plugin))
+    except Exception:
+        return False
+
+
 def _code_word(token):
     return ACTION_WORDS.get(str(token or "").strip().strip("_").lower(), "")
 
@@ -110,59 +135,14 @@ def panel_events(rows, limit=None):
             break
     return out
 
-MIN_GAP_HOURS = 2.5          # 两次邀约之间至少隔 2.5 小时
-MAX_PER_DAY = 2              # 一天最多 2 次邀约
-CEREMONY_LEAD_DAYS = 3       # 喜酒/婚礼至少提前 3 天
-INVITE_WINDOW = (9, 22)      # 只在 9:00-22:00 抛邀约
-INVITE_TTL_HOURS = 8
+#: 纯规则在 services/social_rules.py；这里保留旧名，老代码/测试继续可用。
+_minutes = minutes
+_day_label = day_label
+_off_day = is_off_day
+_relative_label = relative_label
+_retime_ask = retime_ask
 RED_RANGE = (50000, 200000)
 BORROW_DAYS = 30
-
-
-def _minutes(text, default=0):
-    try:
-        hour, minute = str(text).split(":")[:2]
-        return int(hour) * 60 + int(minute)
-    except Exception:
-        return int(default)
-
-
-_DAY_WORDS = (("今天", 0), ("明天", 1), ("后天", 2), ("大后天", 3))
-_PERIODS = (("上午", ("09:00", "11:30")), ("中午", ("12:00", "13:30")),
-            ("下午", ("14:00", "17:00")), ("傍晚", ("17:30", "19:00")),
-            ("晚上", ("19:00", "21:00")), ("夜里", ("20:00", "22:00")))
-
-
-def parse_when(text, now=None):
-    """「明天下午」→ (日期, 14:00, 17:00)。大模型只给自然语言时用它兜底。"""
-    now = now or _dt.datetime.now()
-    body = str(text or "")
-    offset = None
-    for word, days in _DAY_WORDS:
-        if word in body:
-            offset = days
-            break
-    if offset is None and "周末" in body:
-        ahead = (5 - now.weekday()) % 7
-        offset = ahead or 7
-    start, end = "14:00", "17:00"
-    for word, span in _PERIODS:
-        if word in body:
-            start, end = span
-            break
-    target = (now + _dt.timedelta(days=int(offset or 0))).date().isoformat()
-    return target, start, end
-
-
-def _day_label(day):
-    """把日期翻成她聊天时会用的人话：工作日 / 周末 / 法定节假日。"""
-    if is_holiday(day):
-        return "法定节假日"
-    return "周末" if day.weekday() >= 5 else "工作日"
-
-
-def _off_day(day):
-    return bool(day.weekday() >= 5 or is_holiday(day))
 
 
 def _brief_status(row):
@@ -180,30 +160,6 @@ def _nearest_name(name, allowed):
     return matches[0] if matches else ""
 
 
-def _relative_label(target, now):
-    delta = (target - now.date()).days
-    if delta == 0:
-        return "今天"
-    if delta == 1:
-        return "明天"
-    if delta == 2:
-        return "后天"
-    return "%d月%d日" % (target.month, target.day)
-
-
-def _retime_ask(text, target, now, start):
-    """邀约日期/时段被常识规则修正后，把微信原话里的“明天/下午”一起改掉，避免文案穿帮。"""
-    out = str(text or "")
-    label = _relative_label(target, now)
-    for word in ("大后天", "后天", "明天", "今天"):
-        if word in out:
-            out = out.replace(word, label)
-    if _minutes(start) >= 18 * 60:
-        for word in ("上午", "中午", "下午", "白天"):
-            out = out.replace(word, "晚上")
-    return out
-
-
 def _ts(day, hhmm, fallback=0.0):
     try:
         return _dt.datetime.strptime("%s %s" % (day, hhmm), "%Y-%m-%d %H:%M").timestamp()
@@ -216,6 +172,7 @@ class SocialEngine:
         self.plugin = plugin
         self.repo = repo
         self.finance = finance
+        self._inviting = False
 
     # ---------- NPC ----------
     def ensure_seed(self):
@@ -233,7 +190,7 @@ class SocialEngine:
         self._prune()
         self._clean_npc_text()
         try:
-            npc_status.refresh(self.repo)
+            npc_roster.refresh_status(self.repo)
         except Exception as exc:
             isolated("social.status", exc)
 
@@ -435,33 +392,30 @@ class SocialEngine:
         except Exception:
             return 0
 
-    def _amo(self):
-        fn = getattr(self.finance, "_amo", None) if self.finance is not None else None
-        if not callable(fn):
-            return None
-        try:
-            return fn()
-        except Exception:
-            return None
+    def _bridge(self):
+        """跨插件调用门面（Phase 14）：不再自己 finance._amo() 后随手调。"""
+        return AmoBridge(self.plugin, finance=self.finance, scope="social")
 
     def busy_state(self, now=None):
         """约会中 / 睡眠中：她把手机静音了，绝不处理第三方社交。"""
         now = now or _dt.datetime.now()
-        amo = self._amo()
-        if amo is None:
-            return ""
-        try:
-            date_now = amo.db.kv_get("date_now", {}) or {}
-            if isinstance(date_now, dict) and float(date_now.get("until") or 0) > now.timestamp():
-                return "dating"
-        except Exception:
-            pass  # cleanup: best-effort
-        try:
-            act = amo.state.current_activity() or {}
+        bridge = self._bridge()
+        if bridge.ready:
+            if callable(getattr(bridge.resolve(), "is_dating", None)):
+                # 约会会话单一源（Phase 2）：只认会话，不再各自读 date_now
+                result = bridge.call_compat("is_dating", [((now,), {}), ((), {})])
+                if result.ok and result.value:
+                    return "dating"
+            else:
+                date_now = bridge.call("kv_get", "date_now", {}).value or {}
+                if isinstance(date_now, dict) and float(date_now.get("until") or 0) > now.timestamp():
+                    return "dating"
+            act = bridge.call("current_activity").value or {}
             if str(act.get("category") or "") == "sleep":
                 return "sleeping"
-        except Exception:
-            pass  # cleanup: best-effort
+        # 能陪未就绪时也别把「约会中」判丢：守护自己的赴约状态是同一事实
+        if _watch_dating(self.plugin):
+            return "dating"
         return ""
 
     def _fatigue(self):
@@ -503,27 +457,23 @@ class SocialEngine:
         now = now or _dt.datetime.now()
         if self.repo is None:
             return False, "not_ready"
-        if self.pending_invite():
-            return False, "pending"
-        low, high = INVITE_WINDOW
-        if not (low <= now.hour < high):
-            return False, "quiet_hours"
+        # 冷却闸：过期/已处理的待决邀约先清掉，不然会永远卡在 "pending"
+        pending = bool(self._pending_for_decision(now))
         day = now.date().isoformat()
         try:
             count = int(self.repo.meta_get("social:count:" + day, 0) or 0)
         except (TypeError, ValueError):
             count = 0
-        if count >= MAX_PER_DAY:
-            return False, "daily_cap"
         try:
             last = float(self.repo.meta_get("social:last_ts", 0) or 0)
         except (TypeError, ValueError):
             last = 0.0
-        if last and (now.timestamp() - last) < MIN_GAP_HOURS * 3600:
-            return False, "gap"
-        if npc and self.repo.task_done("social:npc:%s:%s" % (day, npc)):
-            return False, "npc_today"
-        return True, ""
+        npc_done = bool(npc and self.repo.task_done("social:npc:%s:%s" % (day, npc)))
+        return can_invite_decision(pending=pending, hour=now.hour, count=count,
+                                   last_ts=last, now_ts=now.timestamp(),
+                                   npc_done=npc_done, window=INVITE_WINDOW,
+                                   max_per_day=MAX_PER_DAY,
+                                   min_gap_hours=MIN_GAP_HOURS)
 
     def ready(self, now=None):
         return self.can_invite(now)[0]
@@ -607,37 +557,15 @@ class SocialEngine:
             target = now.date()
         circle = str(row.get("circle") or "")
 
-        # 硬常识：酒席只能周末/节假日且提前 ≥3 天；工作日白天朋友约只能改晚上；
-        # 领导约饭只能下班后。日期/时段被改后，微信原话里的“明天/下午”同步改掉。
-        if kind == "ceremony":
-            target = max(target, now.date() + _dt.timedelta(days=CEREMONY_LEAD_DAYS))
-            for _ in range(21):
-                if _off_day(target):
-                    break
-                target += _dt.timedelta(days=1)
-            else:
-                return None
-            start, end = "11:00", "13:00"
-        elif circle == "work":
-            while _off_day(target):
-                target += _dt.timedelta(days=1)
-            if kind in ("meal", "drink") and _minutes(start) < 18 * 60:
-                start, end = "19:00", "20:30"
-        elif circle == "friend" and kind in ("meal", "drink", "shopping", "other"):
-            if not _off_day(target) and _minutes(start) < 18 * 60:
-                start, end = "19:00", "21:00"
-
-        # 冲突：挪到下一个空的日子（最多试 14 天；酒席仍只能落在休息日）
-        for _ in range(14):
-            day_text = target.isoformat()
-            if not start or not self._conflict(day_text, start, end):
-                break
-            target += _dt.timedelta(days=1)
-            if kind == "ceremony":
-                while not _off_day(target):
-                    target += _dt.timedelta(days=1)
-        else:
+        # 硬常识 + 冲突改期：纯规则在 services/social_rules.py，engine 只负责落库
+        adjusted = common_sense(target, kind, circle, start, end, now)
+        if adjusted is None:
             return None
+        target, start, end = adjusted
+        target = find_free_day(target, start, end, self._conflict, kind=kind)
+        if target is None:
+            return None
+        day_text = target.isoformat()
         budget = int(data.get("budget_cents") or 0)
         if budget <= 0:
             budget = KIND_BUDGET.get(kind, 10000)
@@ -674,6 +602,9 @@ class SocialEngine:
         self.ensure_seed()
         if self.repo is None or self.finance is None:
             return {"ok": False, "reason": "not_ready"}
+        if getattr(self, "_inviting", False):
+            # 两个定时器并发进来时只让一个去问 LLM，避免同一晚抛两条邀约
+            return {"ok": False, "reason": "busy_compose"}
         if npc and str(npc) not in npc_roster.NAME_SET:
             return {"ok": False, "reason": "unknown_npc"}
         ok, reason = self.can_invite(now, npc)
@@ -685,18 +616,22 @@ class SocialEngine:
             rows = [row for row in rows if str(row.get("name")) == str(npc)]
         if not rows:
             return {"ok": False, "reason": "npc_today"}
-        if composer is None and kind:
-            data = self._manual_data(rows, kind, npc, amount_cents)
-        else:
-            facts = self.compose_facts(now, rows)
-            if composer is None:
-                composer = self.compose_with_llm
-            try:
-                data = await composer(facts)
-            except Exception as exc:
-                isolated("social.compose", exc)
-                data = None
-        invite = self._normalize(now, data, rows) if data else None
+        self._inviting = True
+        try:
+            if composer is None and kind:
+                data = self._manual_data(rows, kind, npc, amount_cents)
+            else:
+                facts = self.compose_facts(now, rows)
+                if composer is None:
+                    composer = self.compose_with_llm
+                try:
+                    data = await composer(facts)
+                except Exception as exc:
+                    isolated("social.compose", exc)
+                    data = None
+            invite = self._normalize(now, data, rows) if data else None
+        finally:
+            self._inviting = False
         if invite is None:
             return {"ok": False, "reason": "compose_failed"}
         busy = self.busy_state(now)
@@ -704,6 +639,10 @@ class SocialEngine:
             # 约会/睡觉期间：消息先存着，绝不触发她的决策；等状态恢复再处理
             invite["deferred"] = time.time()
             invite["deferred_reason"] = busy
+        # 幂等：同一个邀请（同人/同类型/同天同时段）还挂着就不再覆盖、不再记一条新事件
+        old = self.pending_invite()
+        if old and live_invite(old, now) and same_invite(old, invite):
+            return {"ok": False, "reason": "duplicate", "invite": old}
         self.set_invite(invite)
         self.record("social:invite", invite["npc"], invite["ask"], status="pending",
                     amount_cents=invite["amount_cents"], day=day,
@@ -809,22 +748,29 @@ class SocialEngine:
 
     def _drop_schedule(self, day, start, name):
         """扣钱失败时把刚写进去的日程撤回，避免留下没付钱的行程。"""
+        bridge = self._bridge()
+        if not bridge.ready:
+            return
         try:
-            amo = self._amo()
-            state = getattr(amo, "state", None)
+            state = bridge.state()
             items = list((getattr(state, "schedule", {}) or {}).get(day) or [])
             kept = [row for row in items
                     if not (str(row.get("start")) == start and name in str(row.get("activity") or ""))]
             if len(kept) != len(items):
-                state.commit_schedule_change(day, kept, old_items=items,
-                                             source="social", reason="社交回滚日程")
+                bridge.call("commit_schedule_change", day, kept, old_items=items,
+                            source="social", reason="社交回滚日程")
         except Exception as exc:
             isolated("social.drop_schedule", exc)
 
-    def _pending_for_decision(self):
-        """待回邀约；已被处理（resolved）的直接清掉，定时器再也扫不到。"""
+    def _pending_for_decision(self, now=None):
+        """待回邀约；已处理（resolved）或已过期（expired）的直接清掉，定时器再也扫不到。"""
         inv = self.pending_invite()
-        if inv and self.is_resolved(inv.get("token")):
+        if not inv:
+            return None
+        if self.is_resolved(inv.get("token")):
+            self.clear_invite()
+            return None
+        if invite_status(inv, now or _dt.datetime.now()) != PENDING:
             self.clear_invite()
             return None
         return inv
@@ -873,15 +819,16 @@ class SocialEngine:
                         break
             except Exception:
                 existing = False
-        moved = 0
-        while (not existing) and use_start and self._conflict(day_text, use_start, use_end) and moved < 7:
-            day_text = (_dt.date.fromisoformat(day_text) + _dt.timedelta(days=1)).isoformat()
-            moved += 1
-        if (not existing) and use_start and self._conflict(day_text, use_start, use_end):
-            return {"ok": False, "reason": "conflict",
-                    "message": "接下来一周那个时间都排满了，跟她改天吧"}
-        # 事件级幂等键：同一个人、同一天、同一时段只可能扣一次钱
-        idem = "social_event:%s:%s:%s" % (name, day_text, use_start or "any")
+        if use_start and not existing:
+            shifted = find_free_day(_dt.date.fromisoformat(day_text), use_start, use_end,
+                                    self._conflict, max_days=7)
+            if shifted is None:
+                return {"ok": False, "reason": "conflict",
+                        "message": "接下来一周那个时间都排满了，跟她改天吧"}
+            day_text = shifted.isoformat()
+        # 事件级幂等键：按邀约原始日子算，撞车改期后重试也还是同一把钥匙
+        idem = invite_idem(name, str(inv.get("day") or day_text),
+                           str(inv.get("start") or use_start))
         thing = "%s%s" % (name, label or "")
         fact_reason = ("借给%s" % name) if kind == "borrow" else thing
         reason_text = humanize_numbers(npc_roster.sanitize(ledger_line, name)) or fact_reason
@@ -931,6 +878,7 @@ class SocialEngine:
         self.record("social:accept", name, text, status="accepted", amount_cents=cost,
                     day=day_text,
                     extra={"kind": kind, "place": sched.get("place") or inv.get("place") or "",
+                           "start": use_start, "end": use_end,
                            "about_user": about, "ledger_line": reason_text},
                     topic=label, place=sched.get("place") or "", start=use_start, end=use_end,
                     idem="evt:accept:" + str(inv.get("token") or name))
@@ -985,6 +933,7 @@ class SocialEngine:
                     day=str(inv.get("day") or ""), extra={"kind": inv.get("kind")},
                     topic=str(inv.get("topic") or ""))
         self.clear_invite()
+        self.mark_resolved(inv.get("token"))     # 生命周期统一：过期也是终态
         return {"ok": False, "reason": "expired", "invite": inv}
 
     # ---------- 立刻发生、不需要她决定的事 ----------

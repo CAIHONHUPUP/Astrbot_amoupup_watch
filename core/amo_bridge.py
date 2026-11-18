@@ -42,6 +42,11 @@ try:
 except ImportError:
     from utils import facts
 
+try:
+    from . import amo_contract
+except ImportError:  # 按顶层包加载时
+    import amo_contract
+
 
 AMO_PLUGIN_NAME = "Astrbot_amoupup_forever"
 
@@ -50,6 +55,306 @@ FURNITURE_WORDS = ("沙发", "床", "衣柜", "餐桌", "书桌", "书柜", "电
                    "冰箱", "洗衣机", "空调", "梳妆台", "地毯", "窗帘", "吊灯", "置物架",
                    "鞋柜", "床头柜", "台灯", "桌布", "抱枕", "床单", "被套")
 
+
+
+def _data_provider(plugin):
+    """找「我能永远记住你」对外门面（star.mem 优先）；与 nightly_memory 同一约定。"""
+    context = getattr(plugin, "context", None)
+    getter = getattr(context, "get_registered_star", None) if context else None
+    if not callable(getter):
+        return None
+    for name in ("Astrbot_amoupup_data", "Astr_Amo_data"):
+        try:
+            meta = getter(name)
+        except Exception:
+            meta = None
+        if meta is None or getattr(meta, "activated", True) is False:
+            continue
+        star = getattr(meta, "star_cls", None) or getattr(meta, "star", None)
+        if star is None:
+            continue
+        return getattr(star, "mem", None) or star
+    return None
+
+
+def _protocol_dict(value):
+    """protocol_info() 只收 dict；别的形状一律按缺失处理。"""
+    return dict(value) if isinstance(value, dict) else None
+
+
+# ======================================================================
+# 跨插件调用层（Phase 14）：业务代码只许通过 AmoBridge 访问 amo
+# ======================================================================
+class AmoCallResult:
+    """一次跨插件调用的结果；reason ∈ ok/not_ready/missing/failed/timeout。"""
+
+    __slots__ = ("ok", "value", "reason", "error")
+
+    def __init__(self, ok, value=None, reason="ok", error=None):
+        self.ok = bool(ok)
+        self.value = value
+        self.reason = str(reason or "")
+        self.error = error
+
+    def __bool__(self):
+        return self.ok
+
+    def __repr__(self):
+        return "AmoCallResult(ok=%r, reason=%r)" % (self.ok, self.reason)
+
+
+#: 方法名 -> 真实调用。lambda 第一参数故意叫 amo：跨插件契约快照按 `amo.xxx`
+#: 扫描（tests/test_cross_plugin_contract.py），这里就是守护侧唯一的调用点。
+_CALLS = {
+    # amo 根方法
+    "add_closet_item": lambda amo, *a, **k: amo.add_closet_item(*a, **k),
+    "add_hunger": lambda amo, *a, **k: amo.add_hunger(*a, **k),
+    "cancel_date_session": lambda amo, *a, **k: amo.cancel_date_session(*a, **k),
+    "clear_date_ending": lambda amo, *a, **k: amo.clear_date_ending(*a, **k),
+    "clear_date_pause": lambda amo, *a, **k: amo.clear_date_pause(*a, **k),
+    "date_ending": lambda amo, *a, **k: amo.date_ending(*a, **k),
+    "date_session": lambda amo, *a, **k: amo.date_session(*a, **k),
+    "finish_date_session": lambda amo, *a, **k: amo.finish_date_session(*a, **k),
+    "is_dating": lambda amo, *a, **k: amo.is_dating(*a, **k),
+    "_owner_umos": lambda amo, *a, **k: amo._owner_umos(*a, **k),
+    "note_expense_summary": lambda amo, *a, **k: amo.note_expense_summary(*a, **k),
+    "protocol_info": lambda amo, *a, **k: amo.protocol_info(*a, **k),
+    "push_to_owner": lambda amo, *a, **k: amo.push_to_owner(*a, **k),
+    "set_current_action": lambda amo, *a, **k: amo.set_current_action(*a, **k),
+    "set_date_fact": lambda amo, *a, **k: amo.set_date_fact(*a, **k),
+    "set_date_home": lambda amo, *a, **k: amo.set_date_home(*a, **k),
+    "set_date_incident": lambda amo, *a, **k: amo.set_date_incident(*a, **k),
+    "set_date_meet": lambda amo, *a, **k: amo.set_date_meet(*a, **k),
+    "set_date_mood": lambda amo, *a, **k: amo.set_date_mood(*a, **k),
+    "set_date_now": lambda amo, *a, **k: amo.set_date_now(*a, **k),
+    "set_date_pause": lambda amo, *a, **k: amo.set_date_pause(*a, **k),
+    "set_date_prep": lambda amo, *a, **k: amo.set_date_prep(*a, **k),
+    "set_date_separation": lambda amo, *a, **k: amo.set_date_separation(*a, **k),
+    "set_date_ending": lambda amo, *a, **k: amo.set_date_ending(*a, **k),
+    "set_last_date_event": lambda amo, *a, **k: amo.set_last_date_event(*a, **k),
+    # 日程 / 心情状态机
+    "add_schedule_item": lambda amo, *a, **k: amo.state.add_schedule_item(*a, **k),
+    "commit_schedule_change": lambda amo, *a, **k: amo.state.commit_schedule_change(*a, **k),
+    "current_activity": lambda amo, *a, **k: amo.state.current_activity(*a, **k),
+    "nudge": lambda amo, *a, **k: amo.state.nudge(*a, **k),
+    "get_schedule": lambda amo, *a, **k: amo.state.db.get_schedule(*a, **k),
+    # 数据库 / 钱包 / 大模型
+    "kv_get": lambda amo, *a, **k: amo.db.kv_get(*a, **k),
+    "kv_set": lambda amo, *a, **k: amo.db.kv_set(*a, **k),
+    "save_diary": lambda amo, *a, **k: amo.db.save_diary(*a, **k),
+    "balance": lambda amo, *a, **k: amo.wallet.balance(*a, **k),
+    "credit": lambda amo, *a, **k: amo.wallet.credit(*a, **k),
+    "debit": lambda amo, *a, **k: amo.wallet.debit(*a, **k),
+    "late_snack_tick": lambda amo, *a, **k: amo.late_snack_tick(*a, **k),
+    "late_snack_decisions": lambda amo, *a, **k: amo.late_snack_decisions(*a, **k),
+    "ledger": lambda amo, *a, **k: amo.wallet.ledger(*a, **k),
+    "chat_raw": lambda amo, *a, **k: amo.llm.chat_raw(*a, **k),
+}
+
+#: Phase 15：set_date_ending / set_last_date_event 已经登记进 _CALLS 并补进快照，
+#: 已知漂移清零。保留这个空元组，是为了让「没登记的方法」兜底分支继续存在。
+_HIDDEN = ()
+
+
+class AmoBridge:
+    """amo 调用门面：统一「未就绪 / 方法缺失 / 异常 / 超时」的降级与日志。
+
+    业务代码（date_engine / social_engine）不再自己 `_amo()` 后随手调，
+    一律 `AmoBridge(plugin).call(...)`；返回 AmoCallResult，失败不抛。
+    """
+
+    def __init__(self, plugin, finance=None, scope="amo", amo=None):
+        self.plugin = plugin
+        self._finance = finance
+        self.scope = str(scope or "amo")
+        self._given = amo
+        self._amo = None
+        self._resolved = False
+
+    # ---------- 解析 ----------
+    def resolve(self):
+        """懒解析 amo：优先显式 finance，其次 plugin.finance；拿到就缓存。"""
+        if self._resolved:
+            return self._amo
+        self._resolved = True
+        if self._given is not None:      # 老代码/测试直接传 amo 对象
+            self._amo = self._given
+            return self._amo
+        finance = self._finance if self._finance is not None else getattr(self.plugin, "finance", None)
+        getter = getattr(finance, "_amo", None)
+        if not callable(getter):
+            self._amo = None
+            return None
+        try:
+            self._amo = getter()
+        except Exception as exc:
+            isolated("amo_bridge.resolve", exc)
+            self._amo = None
+        if self._amo is None:
+            try:
+                logger.info("[WATCH][AMO] 能陪未就绪，%s 降级继续", self.scope)
+            except Exception:  # cleanup: 日志失败不影响主链
+                pass
+        return self._amo
+
+    @property
+    def ready(self):
+        return self.resolve() is not None
+
+    # ---------- 协议自述（Phase 19） ----------
+    def protocol_info(self, provider="forever"):
+        """读对方 protocol_info()：forever 走 amo 本体，data 走能记门面。
+
+        对方没装 / 旧版本 / 抛异常一律返回 None，交给 amo_contract.compat 判 legacy。
+        """
+        name = str(provider or "forever")
+        if name == "data":
+            data = _data_provider(self.plugin)
+            if data is None:
+                return None
+            try:
+                return _protocol_dict(data.protocol_info())
+            except AttributeError:          # 老能记没有这个方法 -> legacy
+                return None
+            except Exception as exc:
+                isolated("amo_bridge.protocol_info.data", exc)
+                return None
+        amo = self.resolve()
+        if amo is None:
+            return None
+        try:
+            return _protocol_dict(amo.protocol_info())
+        except AttributeError:              # 老能陪没有这个方法 -> legacy
+            return None
+        except Exception as exc:
+            isolated("amo_bridge.protocol_info", exc)
+            return None
+
+    # ---------- 调用 ----------
+    def _note_contract(self, method):
+        ok, reason = amo_contract.check(method)
+        if ok:
+            return
+        try:
+            logger.warning("[WATCH][CONTRACT] 快照未收录 %s（%s）；按已知漂移/新方法放行",
+                           method, reason or "不在 surface 快照里")
+        except Exception:  # cleanup: 日志失败不影响主链
+            pass
+
+    def call(self, method, *args, **kwargs):
+        """同步调用：返回 AmoCallResult（awaitable 原样放在 value 里）。"""
+        amo = self.resolve()
+        if amo is None:
+            return AmoCallResult(False, reason="not_ready")
+        fn = _CALLS.get(str(method or ""))
+        if fn is None:
+            if method in _HIDDEN:
+                return self._hidden_call(amo, method, args, kwargs)
+            try:
+                logger.warning("[WATCH][AMO] 调用层没有登记方法 %s，已跳过", method)
+            except Exception:  # cleanup: 日志失败不影响主链
+                pass
+            return AmoCallResult(False, reason="missing")
+        self._note_contract(method)
+        try:
+            return AmoCallResult(True, fn(amo, *args, **kwargs))
+        except AttributeError as exc:      # 老 amo / 测试桩没有这个方法
+            return AmoCallResult(False, reason="missing", error=exc)
+        except Exception as exc:
+            isolated("amo_bridge." + str(method), exc)
+            return AmoCallResult(False, reason="failed", error=exc)
+
+    def _hidden_call(self, amo, method, args, kwargs):
+        self._note_contract(method)
+        try:
+            target = getattr(amo, method)
+        except AttributeError:
+            try:
+                logger.warning("[WATCH][AMO] 能陪没有方法 %s（老版本？），已跳过", method)
+            except Exception:  # cleanup: 日志失败不影响主链
+                pass
+            return AmoCallResult(False, reason="missing")
+        try:
+            return AmoCallResult(True, target(*args, **kwargs))
+        except Exception as exc:
+            isolated("amo_bridge." + str(method), exc)
+            return AmoCallResult(False, reason="failed", error=exc)
+
+    def call_compat(self, method, variants):
+        """老 amo 签名兼容：按顺序试参数变体，只有 TypeError 才降级到下一组。
+
+        variants: [((args...), {kwargs...}), ...] 或 [(args...), ...]
+        """
+        last = AmoCallResult(False, reason="not_ready")
+        for item in variants or []:
+            if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], dict):
+                args, kwargs = item
+            else:
+                args, kwargs = item, {}
+            last = self.call(method, *tuple(args or ()), **dict(kwargs or {}))
+            if last.ok or not isinstance(last.error, TypeError):
+                return last
+        return last
+
+    async def call_async(self, method, *args, timeout=None, **kwargs):
+        """异步调用（能陪的 push_to_owner 等）：可带超时，超时按 failed 降级。"""
+        import asyncio
+        import inspect
+        amo = self.resolve()
+        if amo is None:
+            return AmoCallResult(False, reason="not_ready")
+        fn = _CALLS.get(str(method or ""))
+        if fn is None:
+            if method in _HIDDEN:
+                async def _run_hidden():
+                    return self._hidden_call(amo, method, args, kwargs)
+                result = await _run_hidden()
+                return result
+            try:
+                logger.warning("[WATCH][AMO] 调用层没有登记方法 %s，已跳过", method)
+            except Exception:  # cleanup: 日志失败不影响主链
+                pass
+            return AmoCallResult(False, reason="missing")
+        self._note_contract(method)
+        try:
+            value = fn(amo, *args, **kwargs)
+            if inspect.isawaitable(value):
+                if timeout:
+                    value = await asyncio.wait_for(value, timeout)
+                else:
+                    value = await value
+            return AmoCallResult(True, value)
+        except Exception as exc:
+            reason = "timeout" if isinstance(exc, asyncio.TimeoutError) else "failed"
+            isolated("amo_bridge." + str(method), exc)
+            return AmoCallResult(False, reason=reason, error=exc)
+
+    # ---------- 只读属性 ----------
+    def get(self, path, default=None):
+        """读 amo 上的属性链（如 "state.schedule"）；缺失/异常返回 default。"""
+        amo = self.resolve()
+        if amo is None:
+            return default
+        target = amo
+        for part in str(path or "").split("."):
+            if not part:
+                continue
+            target = getattr(target, part, None)
+            if target is None:
+                return default
+        return target
+
+    def state(self):
+        return self.get("state", None)
+
+    def db(self):
+        return self.get("db", None)
+
+    def schedule(self):
+        return self.get("state.schedule", {}) or {}
+
+    def owner_umos(self):
+        return list(self.call("_owner_umos").value or [])
 
 class FinanceLink:
     def __init__(self, plugin):

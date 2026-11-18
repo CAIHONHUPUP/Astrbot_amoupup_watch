@@ -30,6 +30,16 @@ KIND_PROJECT = "project"
 KIND_OVERTIME = "overtime"
 
 #: 事件 → 展示名
+PAY_DAY = 15
+
+
+def salary_period(day):
+    """发薪日 15 号之后发生的扣款/奖金，进下个月工资单。"""
+    if int(getattr(day, "day", 1)) > PAY_DAY:
+        return (day.replace(day=1) + _dt.timedelta(days=32)).strftime("%Y-%m")
+    return day.strftime("%Y-%m")
+
+
 LABELS = {
     KIND_LATE: "迟到/早退",
     KIND_SICK: "病假一天",
@@ -109,7 +119,7 @@ class WorkEventEngine:
             return {"ok": False, "reason": "unknown_kind", "kind": kind}
         target = self.day_of(day)
         day_text = target.isoformat()
-        period = target.strftime("%Y-%m")
+        period = salary_period(target)
         rate = self.daily_rate_cents()
         plan = self._plan(kind, rate, target, amount_cents)
         label = plan["label"]
@@ -202,6 +212,30 @@ class WorkEventEngine:
                 "schedule": "本月全勤", "activity": "全勤",
                 "diary": "这个月一天没请假也没迟到，全勤奖到手！",
                 "mood": {"开心": 10, "兴奋": 5}}
+
+    async def sync_amo_sick(self, now=None):
+        """amo 侧生病（自主请假）→ 工资单记一天病假扣款（幂等，每天一次）。"""
+        now = now or _dt.datetime.now()
+        day = now.date()
+        if day.weekday() >= 5:
+            return None
+        amo = self.finance._amo() if hasattr(self.finance, "_amo") else None
+        if amo is None:
+            return None
+        try:
+            from .health_bridge import is_sick
+        except ImportError:
+            from services.health_bridge import is_sick
+        if not is_sick(amo):
+            return None
+        key = "amo_sick_salary:" + day.isoformat()
+        if self.repo.meta_get(key):
+            return None
+        period = salary_period(day)
+        amount = -self.daily_rate_cents()
+        self.salary.add_item(period, "deduction", "病假一天", amount)
+        self.repo.meta_set(key, "1")
+        return {"ok": True, "period": period, "amount_cents": amount}
 
     # ---------- 每日职场小结（写进小时小日记，供每日总结引用） ----------
     async def daily_recap(self, now=None):

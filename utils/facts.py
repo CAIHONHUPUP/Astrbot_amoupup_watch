@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import time
 
-
-def money(cents) -> str:
-    return format(int(cents or 0) / 100.0, ",.2f")
+try:  # Phase 15：账本事实的金额格式只有一个实现
+    from .money import fmt_amount_grouped as money
+except ImportError:  # 顶层模块模式
+    from money import fmt_amount_grouped as money
 
 
 def stamp(when_ts=None) -> str:

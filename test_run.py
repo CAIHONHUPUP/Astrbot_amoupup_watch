@@ -1,3 +1,4 @@
+from typing import Any, TYPE_CHECKING
 # -*- coding: utf-8 -*-
 """test_run.py：Mock amo/记忆，跑 工资→房租→买入→T+1卖出→生病→总资产。"""
 import asyncio, datetime as dt, tempfile, shutil, types
@@ -56,8 +57,12 @@ class Runtime:
         return fn(*a, **k)
 
 
+    if TYPE_CHECKING:  # 宿主成员（插件主类/其它 mixin 提供）：严格口径用声明而不是 ignore
+        finance_repo: Any
 class P:
-    config = {}
+    if TYPE_CHECKING:  # 宿主成员（插件主类/其它 mixin 提供）：严格口径用声明而不是 ignore
+        finance_repo: Any
+    config: dict = {}
     work_events = None
 
 

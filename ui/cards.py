@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import time
+from typing import Any, TYPE_CHECKING
 
 try:
     from ..ui.report import life_block, market_block
@@ -15,6 +16,18 @@ except ImportError:  # 离线测试 / 顶层加载
 
 
 class CardMixin:
+    #: 以下属性由宿主插件实例在运行时注入；mixin 不声明继承，这里只做类型声明。
+    if TYPE_CHECKING:  # 宿主成员（插件主类/其它 mixin 提供）：严格口径用声明而不是 ignore
+        finance_expense: Any
+        finance_life: Any
+        finance_salary: Any
+        work_events: Any
+    config: Any
+    finance: Any
+    finance_repo: Any
+    runtime: Any
+    diag: Any
+
     def _finance_provider(self):
         """金融插件（Astrbot_amoupup_finance）装了就把面板交给它，没装回退空态。"""
         try:
@@ -180,13 +193,13 @@ class CardMixin:
         monthly = sum(int(x.get("monthly_cents") or 0) for x in loans)
         rate = max([float(x.get("rate") or 0) for x in loans] or [0.0])
         mood = self.finance.mood()
-        decision = {}
+        decision: dict[Any, Any] = {}
         try:
             if self.finance_repo is not None:
                 raw = self.finance_repo.meta_get("last_decision")
                 decision = json.loads(raw) if raw else {}
         except Exception:
-            decision = {}
+            decision: dict[Any, Any] = {}
         help_state = {}
         try:
             if self.finance_help is not None:
@@ -244,7 +257,12 @@ class CardMixin:
         try:
             if self.finance_salary is not None:
                 today = _dt.date.today()
-                period = today.strftime("%Y-%m")
+                # 15 号发薪后切到下个月工资单（2026-11-18 用户要求自动刷新）
+                if today.day > 15:
+                    period_day = today.replace(day=1) + _dt.timedelta(days=32)
+                else:
+                    period_day = today
+                period = period_day.strftime("%Y-%m")
                 sal = self.finance_salary.summary(period)
                 life["salary"] = sal["base_cents"] / 100.0
                 life["salary_bonus"] = sal["bonus_cents"] / 100.0
@@ -288,7 +306,9 @@ class CardMixin:
                 self.bank = bank
             if isinstance(view, dict) and bank is not None:
                 cur, fix = int(bank.current_cents()), int(bank.fixed_cents())
-                bank_view = view.get("bank") if isinstance(view.get("bank"), dict) else {}
+                bank_view = view.get("bank")
+                if not isinstance(bank_view, dict):
+                    bank_view = {}
                 bank_view.update({"current_cents": cur, "fixed_cents": fix})
                 view["bank"] = bank_view
                 wallet = view.get("wallet")

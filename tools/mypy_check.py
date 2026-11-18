@@ -28,7 +28,9 @@ def main(argv):
     targets = [arg if os.path.isabs(arg) else os.path.join(ROOT, arg) for arg in argv]
     cmd = [sys.executable, "-m", "mypy",
            "--config-file", os.path.join(ROOT, "mypy.ini"),
-           "--explicit-package-bases", "--check-untyped-defs", "--no-incremental",
+           # mypy.ini 的策略是「注解增量覆盖」：不强制检查未注解函数体；带
+           # --check-untyped-defs 会把 work/ 模拟脚本的未注解体算成噪音（2026-11-17 统一口径）。
+           "--explicit-package-bases", "--no-incremental",
            "--exclude", EXCLUDE]
     cmd += targets or [ROOT]
     return subprocess.call(cmd, env=env, cwd=PARENT)

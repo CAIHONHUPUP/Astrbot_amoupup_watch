@@ -27,6 +27,31 @@ def get_severity(amo):
     return int(SEVERITY.get(get_sick_status(amo), 0))
 
 
+def current_block(amo):
+    """读 amo 当前日程块（dict）；拿不到返回 {}。"""
+    state = getattr(amo, "state", None)
+    try:
+        fn = getattr(state, "current_activity_info", None)
+        if callable(fn):
+            info = fn()
+            if isinstance(info, tuple):
+                info = info[0]
+            if isinstance(info, dict):
+                return info
+        fn = getattr(state, "current_activity", None)
+        if callable(fn):
+            value = fn()
+            if isinstance(value, dict):
+                return value
+    except Exception:
+        return {}
+    return {}
+
+
+def is_asleep(amo):
+    return str(current_block(amo).get("category") or "") == "sleep"
+
+
 def get_sick_duration(amo):
     import time
     h = health_dict(amo)

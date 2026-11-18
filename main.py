@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
 
 try:  # 正常运行时
     from astrbot.api import logger
@@ -21,9 +22,9 @@ except Exception:  # 离线单测 / 直接按文件导入
     logger = logging.getLogger("watch")
     AstrMessageEvent = None
     filter = None
-    class Context:  # type: ignore[no-redef]
+    class Context:
         pass
-    class Star:  # type: ignore[no-redef]
+    class Star:
         def __init__(self, context=None):
             self.context = context
 
@@ -58,8 +59,16 @@ except ImportError:
 _PKG = __package__ or ""
 _configure_clock("Asia/Shanghai")
 
-ApiMixin = _load(_PKG, "api.handlers", "ApiMixin")
-CardMixin = _load(_PKG, "ui.cards", "CardMixin")
+if TYPE_CHECKING:  # 仅类型检查；运行时仍由 _load 动态取（离线/顶层加载都可用）
+    try:  # 包模式
+        from .api.handlers import ApiMixin
+        from .ui.cards import CardMixin
+    except ImportError:  # 顶层加载/单文件
+        from api.handlers import ApiMixin
+        from ui.cards import CardMixin
+else:
+    ApiMixin = _load(_PKG, "api.handlers", "ApiMixin")
+    CardMixin = _load(_PKG, "ui.cards", "CardMixin")
 CandidatePools = _load(_PKG, "services.candidates", "CandidatePools")
 FinanceConsume = _load(_PKG, "services.consume_engine", "FinanceConsume")
 FinanceDaily = _load(_PKG, "services.daily_engine", "FinanceDaily")
@@ -68,6 +77,7 @@ FinanceDecision = _load(_PKG, "core.agent_loop", "FinanceDecision")
 FinanceHelp = _load(_PKG, "services.credit_engine", "FinanceHelp")
 FinanceLife = _load(_PKG, "services.life_engine", "FinanceLife")
 FinanceLink = _load(_PKG, "core.amo_bridge", "FinanceLink")
+AmoBridge = _load(_PKG, "core.amo_bridge", "AmoBridge")
 FinanceProperty = _load(_PKG, "services.property_engine", "FinanceProperty")
 life_block, market_block = _load(_PKG, "ui.report", "life_block", "market_block")
 FinanceSalary = _load(_PKG, "services.work_engine", "FinanceSalary")
@@ -80,14 +90,28 @@ TieredMemory = _load(_PKG, "core.memory_tier", "TieredMemory")
 FinanceRepo = _load(_PKG, "models.ledger", "FinanceRepo")
 Trading = _load(_PKG, "services.trade_engine", "Trading")
 guard_sync, isolated = _load(_PKG, "guard", "guard_sync", "isolated")
-Runtime = _load(_PKG, "core.runtime", "Runtime")
-Scheduler = _load(_PKG, "core.scheduler", "Scheduler")
-Store = _load(_PKG, "models.db", "Store")
+if TYPE_CHECKING:  # 仅类型检查；运行时仍由 _load 动态取
+    try:  # 包模式
+        from .core.runtime import Runtime
+        from .core.scheduler import Scheduler
+        from .models.db import Store
+    except ImportError:  # 顶层加载/单文件
+        from core.runtime import Runtime
+        from core.scheduler import Scheduler
+        from models.db import Store
+else:
+    Runtime = _load(_PKG, "core.runtime", "Runtime")
+    Scheduler = _load(_PKG, "core.scheduler", "Scheduler")
+    Store = _load(_PKG, "models.db", "Store")
 ROUTES = _load(_PKG, "api.routes", "ROUTES")
+# Phase 17：结构化健康快照（只读、纯内存、缺失降级）
+health_snapshot = _load(_PKG, "core.observability", "health_snapshot")
+amo_contract = _load(_PKG, "core.amo_contract")
+SCHEMA_VERSION = _load(_PKG, "models.db", "SCHEMA_VERSION")
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag", "finance"]
 
@@ -139,6 +163,19 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         return bool(default)
 
     # ---------------- 生命周期 ----------------
+    def _mirror_npcs(self):
+        """把 NPC 关系镜像到 amo kv：能陪写日记/聊天时才知道「沈幼微=远房表姐」。"""
+        try:
+            amo = self.finance._amo()
+            if amo is None:
+                return
+            rows = self.finance_repo.npcs() if self.finance_repo is not None else []
+            mapping = {str(r.get("name")): str(r.get("relation")) for r in rows if r.get("name")}
+            amo.db.kv_set("npc_summary", mapping)
+            logger.info("[WATCH] npc_summary mirrored %d", len(mapping))
+        except Exception as exc:
+            isolated("npc.mirror", exc)
+
     async def initialize(self):
         self._started_at = time.time()
         cfg = self.config
@@ -157,6 +194,7 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             logger.error("[WATCH] degraded reason=store_init err=%r", exc)
         if self.store is not None:
             self.finance_repo = FinanceRepo(self.store)
+            self._mirror_npcs()
             self.trading = Trading(self, self.runtime, self.finance_repo, self.finance)
             self.finance_life = FinanceLife(self, self.finance_repo, self.finance)
             self.finance_property = FinanceProperty(self, self.finance_repo, self.finance, self.finance_life)
@@ -240,6 +278,31 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         logger.info("[WATCH] terminated generation=%s %s",
                     getattr(self.runtime, "generation", "?"), result)
     # ---------------- 握手端口（amo 唯一入口） ----------------
+    def obs_health(self) -> dict:
+        """Phase 17：结构化健康快照（plugin/version/uptime/db/jobs/counts）。
+
+        纯内存只读：schema 用常量（真正的 user_version 在 diag 的 store.stats 里），
+        jobs 走 scheduler 快照，任何一项缺失都降级成空，不抛异常。
+        """
+        return health_snapshot(
+            PLUGIN_NAME,
+            version=PLUGIN_VERSION,
+            db={"schema_version": SCHEMA_VERSION, "ok": self.store is not None},
+            jobs=self.scheduler,
+            started_at=self._started_at,
+            now=time.time(),
+        )
+
+    def protocol_summary(self) -> dict:
+        """Phase 19：跨插件协议摘要（只读、不抛；缺失按 legacy 报告）。"""
+        try:
+            return amo_contract.protocol_summary(AmoBridge(self))
+        except Exception as exc:
+            isolated("port.protocol", exc)
+            return {"role": "consumer",
+                    "protocol_version": amo_contract.PROTOCOL_VERSION,
+                    "providers": {}, "error_code": "protocol.degraded"}
+
     @guard_sync("port.describe", default=None)
     def describe(self) -> dict:
         """同步、纯内存、不碰 IO。amo 每次握手都调它。"""
@@ -255,6 +318,11 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             "started_at": self._started_at,
             "generation": getattr(self.runtime, "generation", ""),
             "tasks": tasks["count"],
+            "jobs": self.scheduler.report() if self.scheduler is not None else [],
+            # Phase 17：只新增字段，原字段逐字保留
+            "health": self.obs_health(),
+            # Phase 19：跨插件协议摘要（只新增字段）
+            "protocol": self.protocol_summary(),
         }
     @guard_sync("port.diag", default={"status": "error"})
     def diag_sync(self) -> dict:
@@ -263,6 +331,11 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             "tasks": self.runtime.tasks() if self.runtime else {"count": 0, "names": []},
             "lag": self.runtime.lag_stats() if self.runtime else {},
             "degraded": self._degraded,
+            "jobs": self.scheduler.summary() if self.scheduler is not None else {},
+            # Phase 17：只新增字段，原字段逐字保留
+            "health": self.obs_health(),
+            # Phase 19：跨插件协议摘要（只新增字段）
+            "protocol": self.protocol_summary(),
         }
     async def diag(self) -> dict:
         out = self.diag_sync()

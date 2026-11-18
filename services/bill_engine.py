@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """账单：按大类分组，今日/本月合计；同时给聊天 Prompt 提供当日摘要。"""
 from __future__ import annotations
+from typing import Any
 
 import datetime as _dt
 
@@ -21,7 +22,7 @@ def summary(plugin, now=None):
     today = now.date()
     month = (now.year, now.month)
     today_cents = month_cents = 0
-    groups = {}  # type: ignore[var-annotated]
+    groups: dict[str, Any] = {}
     for it in _items(plugin):
         try:
             when = _dt.datetime.fromtimestamp(float(it.get("ts") or 0))

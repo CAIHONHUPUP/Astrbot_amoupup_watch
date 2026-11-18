@@ -51,8 +51,10 @@ class FakeState:
 class FakeLLM:
     def __init__(self, payload):
         self.payload = payload
+        self.prompts = []
 
     async def chat_raw(self, umo, system, prompt):
+        self.prompts.append(prompt)
         return self.payload
 
 
@@ -162,14 +164,14 @@ def test_finish_truncates_date_item_to_now():
 
 
 def test_replan_writes_llm_segments_not_hardcoded_rest():
-    payload = ('[{"start":"19:35","end":"20:05","activity":"和老公散步回家",'
-               '"place":"路上","category":"social","zone":"road"},'
-               '{"start":"20:05","end":"21:00","activity":"到家瘫在沙发上休息",'
+    payload = ('[{"start":"19:35","end":"20:05","activity":"一个人走回家（耳机里还连着）",'
+               '"place":"路上","category":"life","zone":"road"},'
+               '{"start":"20:05","end":"21:00","activity":"到家给他发消息/视频道晚安",'
                '"place":"家","category":"rest","zone":"home"}]')
     p = FakePlugin(reply=payload)
     segments = asyncio.run(de.replan_remaining(p, p.amo, NOW, "火锅"))
-    assert [seg["activity"] for seg in segments] == ["和老公散步回家", "到家瘫在沙发上休息"]
-    assert [item["activity"] for item in p.amo.state.added] == ["和老公散步回家", "到家瘫在沙发上休息"]
+    assert [seg["activity"] for seg in segments] == ["一个人走回家（耳机里还连着）", "到家给他发消息/视频道晚安"]
+    assert [item["activity"] for item in p.amo.state.added] == ["一个人走回家（耳机里还连着）", "到家给他发消息/视频道晚安"]
     assert all(item["end"] > item["start"] for item in p.amo.state.added)
 
 
@@ -178,6 +180,16 @@ def test_replan_ignores_bad_times():
     p = FakePlugin(reply=payload)
     assert asyncio.run(de.replan_remaining(p, p.amo, NOW, "火锅")) == []
     assert p.amo.state.added == []
+
+
+def test_replan_prompt_is_alone_after_date():
+    """收尾重排提示词：他不在她身边，她一个人回去，不再写「一起回家」。"""
+    p = FakePlugin(reply="[]")
+    asyncio.run(de.replan_remaining(p, p.amo, NOW, "火锅"))
+    prompt = p.amo.llm.prompts[-1]
+    assert "一起回家" not in prompt
+    assert "住在一起" not in prompt
+    assert "一个人" in prompt
 
 
 def test_finance_schedule_uses_current_place():

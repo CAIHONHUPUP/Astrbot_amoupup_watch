@@ -5,6 +5,7 @@
 钱全部走 FinanceLink → amo.wallet；本模块只决定「该扣多少、该发多少」。
 """
 from __future__ import annotations
+from typing import Any
 
 import logging
 logger = logging.getLogger("amo.watch")
@@ -15,9 +16,15 @@ import time
 
 try:
     from ..utils.helpers import rent_cents as base_rent_cents
+    from ..utils.money import fmt_amount, idem as idem_key
 except ImportError:  # 按顶层包（services.xxx）导入时
     from utils.helpers import rent_cents as base_rent_cents
+    from utils.money import fmt_amount, idem as idem_key
 from .city import current_city, factor_of
+try:  # 三餐窗口单一来源：daily_engine.WINDOWS（两套吃饭系统共用，避免漂移）
+    from .daily_engine import WINDOWS as MEAL_WINDOWS
+except ImportError:  # 按顶层包导入时
+    from services.daily_engine import WINDOWS as MEAL_WINDOWS
 
 DEFAULT_SALARY_CENTS = 680000          # 6800 元
 MIN_SALARY_CENTS, MAX_SALARY_CENTS = 300000, 2000000
@@ -61,7 +68,7 @@ class FinanceLife:
         cash = self.finance.balance_cents() or 0
         market = 0
         for row in self.repo.positions():
-            market += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)  # type: ignore[assignment]
+            market += int(row.get("last_cents") or 0) * float(row.get("qty") or 0)
         debt = sum(int(x.get("balance_cents") or 0) for x in self.repo.loans())
         assets = sum(int(x.get("value_cents") or 0) for x in self.repo.assets())
         return int(cash + market + assets - debt)
@@ -143,23 +150,56 @@ class FinanceLife:
             return 25.0 if now.hour >= 20 else 100.0
         return 20.0 if (now.timestamp() - last) > 6 * 3600 else 100.0
 
+    def _meal_slot(self, now):
+        """now 落在哪个三餐窗口（不在任何窗口就 None）。"""
+        minutes = now.hour * 60 + now.minute
+        for slot, (start, end) in MEAL_WINDOWS.items():
+            if start[0] * 60 + start[1] <= minutes < end[0] * 60 + end[1]:
+                return slot
+        return None
+
+    def _slot_done(self, now, slot):
+        """这一顿今天是不是已经吃过了（与 daily_engine 共享同一个 meta 标记）。"""
+        if self.repo is None:
+            return False
+        try:
+            return bool(self.repo.meta_get(idem_key("meal", now.date().isoformat(), slot)))
+        except Exception:
+            return False
+
+    def _recent_meal(self, now, minutes=90):
+        """上一次正餐是不是在 minutes 分钟内（跨系统共用的 last_meal_at）。"""
+        if self.repo is None:
+            return False
+        try:
+            last = float(self.repo.meta_get("last_meal_at", 0) or 0)
+        except Exception:
+            return False
+        return bool(last) and (now.timestamp() - last) < minutes * 60
+
     async def _check_hunger(self, now=None):
         now = now or _dt.datetime.now()
         finance = getattr(self, "finance", None)
         amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
-        state = {}  # type: ignore[var-annotated]
+        state: dict[str, Any] = {}
         if amo is not None and hasattr(amo, "hunger_state"):
             try:
                 state = amo.hunger_state() or {}
             except Exception:
-                state = {}
+                state: dict[str, Any] = {}
         if not state:
             state = {"value": self._hunger_fallback(now), "cooldown_until": 0, "sick": False}
+        try:
+            from .health_bridge import is_asleep
+        except ImportError:
+            from services.health_bridge import is_asleep
+        if is_asleep(amo):
+            return None
         if float(state.get("cooldown_until") or 0) > time.time():
             return None
         if float(state.get("value") or 100) >= 30:
             return None
-        cash = int(finance.balance_cents() or 0)  # type: ignore[union-attr]
+        cash = int(finance.balance_cents() or 0)
         if cash < 500:
             text = "老公，我肚子好饿，但是微信里连买个包子的钱都不够了，呜呜呜……"
             try:
@@ -170,21 +210,31 @@ class FinanceLife:
             except Exception as exc:
                 logger.debug("[WATCH] optional step failed: %r", exc)
             try:
-                finance.nudge_mood({"委屈": 25, "郁闷": 20, "焦虑": 15},  # type: ignore[union-attr]
+                finance.nudge_mood({"委屈": 25, "郁闷": 20, "焦虑": 15},
                                    "hunger:help:%s" % time.strftime("%Y%m%d"))
-                finance.small_diary("肚子好饿，翻遍了房间只有一包过期的饼干……")  # type: ignore[union-attr]
+                finance.small_diary("肚子好饿，翻遍了房间只有一包过期的饼干……")
             except Exception as exc:
                 logger.debug("[WATCH] optional step failed: %r", exc)
             return {"help": True}
         sick = bool(state.get("sick"))
-        mood = finance.mood() or {}  # type: ignore[union-attr]
-        night = now.hour >= 23 or now.hour < 5
+        mood = finance.mood() or {}
+        if now.hour >= 23 or now.hour < 5:
+            # 宵夜只有一个入口：交给 amo late_snack_tick。
+            # 守护不再自己扣款/写日程/写日记，也不再和 amo 抢着补宵夜块。
+            return await self._late_snack_via_amo(now)
+
+        # 三餐锚定（2026-11-17）：白天只在饭点、且这一顿还没吃过、90 分钟内没吃过时才觅食；
+        # 非饭点只有快饿晕（<15）才兜底，避免一天四顿、饭点前一小时又吃一顿。
+        slot_name = self._meal_slot(now)
+        if slot_name is None:
+            if float(state.get("value") or 100) >= 15:
+                return None
+        elif self._slot_done(now, slot_name) or self._recent_meal(now):
+            return None
         if cash < 5000:
             food, amount, gain, deltas, mood_word = ("馒头和泡面", 800, 15, {"委屈": 10}, "有点委屈")
         elif sick:
             food, amount, gain, deltas, mood_word = ("白粥和清淡面条", 1200, 25, {"委屈": 6}, "淡淡的")
-        elif night:
-            food, amount, gain, deltas, mood_word = ("烧烤和泡面", 2800, 30, {"开心": 4, "疲惫": -2}, "罪恶又爽")
         elif (float(mood.get("郁闷") or 0) + float(mood.get("疲惫") or 0)) >= 120:
             food, amount, gain, deltas, mood_word = ("炸鸡和奶茶", 4000, 30, {"开心": 10, "委屈": -4}, "罪恶又爽")
         else:
@@ -210,32 +260,54 @@ class FinanceLife:
             except Exception as exc:
                 logger.debug("[WATCH] optional step failed: %r", exc)
         idem = "hunger:%s:%s" % (time.strftime("%Y%m%d%H"), food)
-        res = await finance.expense(amount, "吃的：%s" % food, idem, necessary=True)  # type: ignore[union-attr]
+        res = await finance.expense(amount, "吃的：%s" % food, idem, necessary=True)
         if not isinstance(res, dict) or not res.get("ok"):
             return None
         try:
             if amo is not None and hasattr(amo, "add_hunger"):
+                try:
+                    current = float((amo.hunger_state() or {}).get("value") or 0)
+                except Exception:
+                    current = 0.0
+                gain = max(float(gain), 80.0 - current)   # 吃到七分饱，不是只加 40
                 amo.add_hunger("amo", gain)
-                amo.mark_meal(food, 4, mood_word)
+                amo.mark_meal(food, 3, mood_word)
             if self.repo is not None:
                 self.repo.meta_set("last_meal_at", time.time())
+                if slot_name:
+                    self.repo.meta_set(idem_key("meal", now.date().isoformat(), slot_name), "1")
         except Exception as exc:
             logger.debug("[WATCH] optional step failed: %r", exc)
         try:
-            finance.nudge_mood(deltas, idem + ":mood")  # type: ignore[union-attr]
+            finance.nudge_mood(deltas, idem + ":mood")
             if sick:
                 diary = "生病了只能喝粥，好想吃火锅。"
-            elif night:
-                diary = "今天半夜饿了，没忍住煮了包泡面，加了根肠，花了 %d 块钱。" % max(1, amount // 100)
             else:
-                diary = "饿了，买了%s，花了 %.2f 元，吃完舒服多了。" % (food, amount / 100.0)
-            finance.small_diary(diary)  # type: ignore[union-attr]
-            hour = int(getattr(now, "hour", 12))
-            if hour >= 23 or hour < 5:
-                await finance.permanent_memory("半夜饿得不行，吃了%s。" % food, idem + ":mem")  # type: ignore[union-attr]
+                diary = "饿了，买了%s，花了 %s 元，吃完舒服多了。" % (food, fmt_amount(amount))
+            finance.small_diary(diary)
         except Exception as exc:
             logger.debug("[WATCH] optional step failed: %r", exc)
         return {"food": food, "amount": amount, "gain": gain, "mood": mood_word}
+
+    async def _late_snack_via_amo(self, now):
+        """宵夜唯一入口：只调 amo late_snack_tick，不自己扣款/写日程/写日记。
+
+        amo 没装、老版本没这个方法、或调用失败时安全降级：返回 None，
+        钱包和日程都不动，也不假装吃过。
+        """
+        try:
+            from ..core.amo_bridge import AmoBridge
+        except ImportError:
+            from core.amo_bridge import AmoBridge
+        bridge = AmoBridge(self.plugin, finance=self.finance)
+        result = await bridge.call_async("late_snack_tick", now=now)
+        if not result.ok or not isinstance(result.value, dict):
+            return None
+        info = result.value
+        return {"late_snack": True, "eat": bool(info.get("eat")),
+                "food": str(info.get("food") or ""),
+                "amount": int(info.get("charged") or 0),
+                "skipped": str(info.get("skipped") or "")}
 
     # ---------- 结算 ----------
     async def tick(self, now=None):
@@ -299,7 +371,7 @@ class FinanceLife:
         if salary_mod is None:
             # 没有工资模块（老部署/单测）：退回直接发当月基本工资
             amount = self.salary_cents()
-            result = await self.finance.income(amount, "工资", "salary:" + period, salary=True)
+            result = await self.finance.income(amount, "工资", idem_key("salary", period), salary=True)
             if not result.get("ok"):
                 return "fail"
             self.repo.mark_settled(period, "salary", str({"amount": amount}))
@@ -319,7 +391,7 @@ class FinanceLife:
         if callable(cfg) and not cfg("bill_autopay", True):
             return "bill_deferred"
         amount = self.rent_cents(period)
-        result = await self.finance.expense(amount, "房租", "rent:" + period, necessary=True)
+        result = await self.finance.expense(amount, "房租", idem_key("rent", period), necessary=True)
         if not result.get("ok"):
             return "fail"
         self.repo.mark_settled(period, "rent", str(amount))
@@ -357,11 +429,11 @@ class FinanceLife:
         for key, name, amount in plan:
             if self.repo.settled(period, key):
                 continue
-            result = await self.finance.expense(amount, name, "%s:%s" % (key, period), necessary=True)
+            result = await self.finance.expense(amount, name, idem_key(key, period), necessary=True)
             if not result.get("ok"):
                 try:
                     await self.finance.remember_event("欠费", amount, "%s 扣款失败，先欠着，%s" % (
-                        name, (await self.finance.memory.context(limit=1)) or ""), "arrears:%s:%s" % (key, period))
+                        name, (await self.finance.memory.context(limit=1)) or ""), idem_key("arrears", key, period))
                 except Exception as exc:
                     logger.debug("[WATCH] optional step failed: %r", exc)
                 return "fail"

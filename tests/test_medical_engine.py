@@ -6,15 +6,10 @@ import datetime as dt
 from services.medical_engine import MedicalEngine, COST_RANGES
 
 
-class Repo:
-    def __init__(self):
-        self.meta = {}
-
-    def meta_get(self, key, default=None):
-        return self.meta.get(key, default)
-
-    def meta_set(self, key, value):
-        self.meta[key] = value
+try:  # Phase 15：meta 桩改用 tests/fixtures.py 的共享实现（断言不变）
+    from tests.fixtures import FakeRepo as Repo  # noqa: E402
+except ImportError:
+    from fixtures import FakeRepo as Repo  # noqa: E402
 
 
 class Finance:

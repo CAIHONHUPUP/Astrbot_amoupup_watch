@@ -21,6 +21,7 @@ class FakeAmo:
         self.meals = []
         self.asked = 0
         self.help_text = ""
+        self.snacks = []
 
     def hunger_state(self):
         return dict(self.state)
@@ -37,6 +38,26 @@ class FakeAmo:
     async def hunger_help(self, text):
         self.asked += 1
         self.help_text = text
+
+    async def late_snack_tick(self, now=None, roll=None, say=None):
+        self.snacks.append(now)
+        return {"ok": True, "eat": True, "charged": 2800, "food": "烧烤", "block_id": "b1"}
+
+
+class NoSnackAmo:
+    """老 amo：没有 late_snack_tick，宵夜必须降级成不动钱包。"""
+
+    def hunger_state(self):
+        return {"value": 20, "cooldown_until": 0, "sick": False}
+
+    def add_hunger(self, target, amount):
+        raise AssertionError("降级路径不该加饱腹")
+
+    def mark_meal(self, food, hours=4, mood="满足"):
+        raise AssertionError("降级路径不该记正餐")
+
+    def request_hunger_help(self):
+        pass
 
 
 class FakeFinance:
@@ -72,14 +93,25 @@ class FakeFinance:
         self.memories.append(text)
 
 
+class FakeRepo:
+    def __init__(self, meta=None):
+        self.meta = dict(meta or {})
+
+    def meta_get(self, key, default=None):
+        return self.meta.get(key, default)
+
+    def meta_set(self, key, value):
+        self.meta[key] = value
+
+
 def run(life, when=None):
     return asyncio.run(life._check_hunger(when or dt.datetime(2026, 11, 14, 12, 0)))
 
 
 class HungerForageTests(unittest.TestCase):
-    def make(self, **kwargs):
+    def make(self, repo=None, **kwargs):
         finance = FakeFinance(**kwargs)
-        return FinanceLife(None, None, finance), finance
+        return FinanceLife(None, repo, finance), finance
 
     def test_not_hungry_does_nothing(self):
         life, finance = self.make(amo=FakeAmo(value=60))
@@ -96,15 +128,15 @@ class HungerForageTests(unittest.TestCase):
         out = run(life)
         self.assertEqual(out["food"], "一碗热汤面")
         self.assertEqual(finance.spent[0][0], 2000)
-        self.assertEqual(finance.amo.added[-1], 40)
-        self.assertEqual(finance.amo.meals[-1][1], 4)
+        self.assertEqual(finance.amo.added[-1], 60.0)   # 补到七分饱（80-20）
+        self.assertEqual(finance.amo.meals[-1][1], 3)
 
     def test_cheap_meal_when_low_cash(self):
         life, finance = self.make(cash=3000, amo=FakeAmo(value=20))
         out = run(life)
         self.assertEqual(out["food"], "馒头和泡面")
         self.assertEqual(finance.spent[0][0], 800)
-        self.assertEqual(finance.amo.added[-1], 15)
+        self.assertEqual(finance.amo.added[-1], 60.0)   # 便宜餐也一样补到七分饱
 
     def test_sick_only_porridge(self):
         life, finance = self.make(cash=20000, amo=FakeAmo(value=20, sick=True))
@@ -113,13 +145,22 @@ class HungerForageTests(unittest.TestCase):
         self.assertEqual(finance.spent[0][0], 1200)
         self.assertIn("生病了只能喝粥", finance.diaries[-1])
 
-    def test_late_night_snack(self):
+    def test_late_night_delegates_to_amo_entry(self):
         life, finance = self.make(cash=20000, amo=FakeAmo(value=20))
         out = run(life, dt.datetime(2026, 11, 14, 23, 40))
-        self.assertEqual(out["food"], "烧烤和泡面")
-        self.assertEqual(finance.spent[0][0], 2800)
-        self.assertIn("半夜", finance.diaries[-1])
-        self.assertTrue(finance.memories)
+        self.assertTrue(out["late_snack"])
+        self.assertEqual(len(finance.amo.snacks), 1, "宵夜只许调 amo 一次")
+        self.assertEqual(finance.spent, [], "守护不许自己扣宵夜钱")
+        self.assertEqual(finance.diaries, [], "守护不许自己写宵夜日记")
+        self.assertEqual(finance.memories, [], "守护不许自己写宵夜记忆")
+
+    def test_late_night_without_amo_entry_degrades_safely(self):
+        life, finance = self.make(cash=20000, amo=NoSnackAmo())
+        out = run(life, dt.datetime(2026, 11, 14, 23, 40))
+        self.assertIsNone(out)
+        self.assertEqual(finance.spent, [])
+        self.assertEqual(finance.diaries, [])
+        self.assertEqual(finance.memories, [])
 
     def test_low_mood_comfort_food(self):
         life, finance = self.make(cash=20000, amo=FakeAmo(value=20),
@@ -136,6 +177,34 @@ class HungerForageTests(unittest.TestCase):
         self.assertIn("买个包子", finance.amo.help_text)
         self.assertIn("过期的饼干", finance.diaries[-1])
 
+
+
+    def test_outside_meal_window_skips(self):
+        # 15:30 既不是饭点、也没饿到 <15：不吃（以前这里会吃一碗热汤面）
+        life, finance = self.make(cash=20000, amo=FakeAmo(value=20))
+        self.assertIsNone(run(life, dt.datetime(2026, 11, 14, 15, 30)))
+        self.assertEqual(finance.spent, [])
+
+    def test_slot_already_eaten_skips(self):
+        # 这一顿已经由 daily_engine 吃过（共享 meta 标记）：不再吃第二顿
+        repo = FakeRepo({"meal:2026-11-14:lunch": "1"})
+        life, finance = self.make(repo=repo, cash=20000, amo=FakeAmo(value=20))
+        self.assertIsNone(run(life))
+        self.assertEqual(finance.spent, [])
+
+    def test_recent_meal_skips(self):
+        when = dt.datetime(2026, 11, 14, 12, 0)
+        repo = FakeRepo({"last_meal_at": when.timestamp() - 10 * 60})
+        life, finance = self.make(repo=repo, cash=20000, amo=FakeAmo(value=20))
+        self.assertIsNone(run(life, when))
+        self.assertEqual(finance.spent, [])
+
+    def test_starving_outside_window_still_eats(self):
+        # 非饭点但快饿晕（<15）：兜底吃一顿，避免饿出事
+        life, finance = self.make(cash=20000, amo=FakeAmo(value=8))
+        out = run(life, dt.datetime(2026, 11, 14, 15, 30))
+        self.assertEqual(out["food"], "一碗热汤面")
+        self.assertEqual(len(finance.spent), 1)
 
 if __name__ == "__main__":
     unittest.main()

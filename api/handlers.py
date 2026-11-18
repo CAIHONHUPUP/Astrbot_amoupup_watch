@@ -5,10 +5,12 @@
 放成 mixin 可以原样搬运，不改一行业务代码。
 """
 from __future__ import annotations
+from typing import Any, TYPE_CHECKING
 
 import base64
 import datetime as _dt
 import logging
+import math
 import os
 import time
 
@@ -23,7 +25,39 @@ except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
 
 
+def _ledger_ts(value):
+    """流水时间戳（epoch 秒）-> float；缺失/非法按 0，保证排序不崩。"""
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return ts if math.isfinite(ts) else 0.0
+
+
+def _ledger_date_time(value):
+    """epoch 秒 -> 本地时区 (YYYY-MM-DD, HH:MM)；缺失/非法返回空串。"""
+    ts = _ledger_ts(value)
+    if ts <= 0:
+        return "", ""
+    try:
+        when = _dt.datetime.fromtimestamp(ts)
+    except (OverflowError, OSError, ValueError) as exc:
+        isolated("web.ledger.time", exc)
+        return "", ""
+    return when.strftime("%Y-%m-%d"), when.strftime("%H:%M")
 class ApiMixin:
+    if TYPE_CHECKING:  # 宿主成员（插件主类/其它 mixin 提供）：严格口径用声明而不是 ignore
+        _finance_snapshot: Any
+        diag: Any
+        finance: Any
+        finance_consume: Any
+        finance_decision: Any
+        finance_expense: Any
+        finance_help: Any
+        finance_property: Any
+        finance_repo: Any
+        finance_salary: Any
+        work_events: Any
     async def _api_finance_demo(self, request=None):
         try:
             return self._finance_snapshot(demo=True)
@@ -32,7 +66,7 @@ class ApiMixin:
             return {"status": "error", "message": "demo failed"}
 
     async def _api_ledger(self, request=None):
-        """GET 明细流水：每一笔带 大类/小类/物品/原因/时间。"""
+        """GET 明细流水：每行补 date/time，全局按时间倒序（排序只在后端做一次）。"""
         try:
             finance = getattr(self, "finance", None)
             amo = finance._amo() if finance is not None and hasattr(finance, "_amo") else None
@@ -42,7 +76,14 @@ class ApiMixin:
                 from ..utils.ui_sanitize import sanitize_ledger_item
             except ImportError:
                 from utils.ui_sanitize import sanitize_ledger_item
-            rows = [sanitize_ledger_item(item) for item in (amo.wallet.ledger(80) or [])]
+            rows = []
+            for item in (amo.wallet.ledger(80) or []):
+                row = sanitize_ledger_item(item)
+                if not isinstance(row, dict):
+                    continue
+                row["date"], row["time"] = _ledger_date_time(row.get("ts"))
+                rows.append(row)
+            rows.sort(key=lambda row: _ledger_ts(row.get("ts")), reverse=True)
             return {"ok": True, "items": rows}
         except Exception as exc:
             isolated("web.ledger", exc)
@@ -366,6 +407,64 @@ class ApiMixin:
         except Exception as exc:
             return {"ok": False, "message": "房屋读取失败：%s" % exc, "homes": []}
 
+    async def _api_decisions(self, request=None):
+        """GET 她最近的自主决定：只读展示，默认只看今天（days/limit 仅供测试）。
+
+        2026-11-17 W5：除宵夜外补约会/社交/购物/看病（只读现有 kv/审计），
+        并把决定金额与 wallet 流水的块金额对账；对不上标 pending（前端「待对账」），
+        不静默吞掉。
+        """
+        try:
+            try:
+                from ..core.amo_bridge import AmoBridge
+            except ImportError:      # 离线测试 / 顶层加载
+                from core.amo_bridge import AmoBridge
+            try:
+                from . import decisions_ext
+            except ImportError:      # 单文件作为顶层模块加载
+                try:
+                    from api import decisions_ext
+                except ImportError:
+                    import decisions_ext
+            days, limit = 1, 50
+            try:
+                query = getattr(request, "query_params", None)
+                if query:
+                    params = dict(query)
+                    days = int(params.get("days") or 1)
+                    limit = int(params.get("limit") or 50)
+            except Exception as exc:
+                isolated("web.decisions.query", exc)
+            days = max(1, min(int(days or 1), 30))
+            limit = max(1, min(int(limit or 50), 200))
+            day = _dt.date.today().isoformat()
+            blocks = []
+            summary = {"status": decisions_ext.STATUS_OK, "checked": 0, "pending": 0,
+                       "decision_total_cents": 0, "ledger_total_cents": 0, "items": []}
+            bridge = AmoBridge(self, finance=getattr(self, "finance", None), scope="decisions")
+            if not bridge.ready:
+                return {"ok": False, "day": day, "items": [], "kinds": [], "blocks": [],
+                        "reconcile": summary, "message": "她还不在线，决定稍后再看"}
+            result = bridge.call("late_snack_decisions", days=days, limit=limit)
+            if not result.ok:
+                return {"ok": False, "day": day, "items": [], "kinds": [], "blocks": [],
+                        "reconcile": summary, "message": "决定暂时读不到，稍后再看"}
+            items = result.value if isinstance(result.value, list) else []
+            try:
+                blocks = decisions_ext.ledger_blocks(decisions_ext.ledger_rows(bridge))
+                _, summary = decisions_ext.reconcile(items, blocks, day=day)
+                kinds = decisions_ext.collect_extra(
+                    bridge, getattr(self, "finance_repo", None), day)
+            except Exception as exc:      # 扩展/对账失败：宵夜照常显示，不整页报错
+                isolated("web.decisions.extend", exc)
+                kinds = []
+            return {"ok": True, "day": day, "items": items, "kinds": kinds,
+                    "blocks": decisions_ext.blocks_for_day(blocks, day),
+                    "reconcile": summary}
+        except Exception as exc:
+            isolated("web.decisions", exc)
+            return {"ok": False, "message": "决定暂时读不到，稍后再看", "items": []}
+
     async def _api_medical(self, request=None):
         """GET 看病历/生病状态；POST {level,name,days,event_id} 模拟一场病（走同一入口）。"""
         try:
@@ -382,10 +481,14 @@ class ApiMixin:
                         hunger = amo.hunger_state()
                 except Exception:
                     hunger = {}
-                return {"ok": True, "is_sick": medical.is_sick(), "last_checkup": self.finance_repo.meta_get("checkup:last", "") if self.finance_repo else "", "last_hp": self.finance_repo.meta_get("checkup:last_hp", "") if self.finance_repo else "",
-                        "in_bed_rest": medical.in_bed_rest(),
+                snap = medical.health_snapshot() or {}
+                sick = bool(snap.get("sick")) or medical.is_sick()
+                return {"ok": True, "is_sick": sick,
+                        "sick_status": snap.get("status") or "",
+                        "last_checkup": self.finance_repo.meta_get("checkup:last", "") if self.finance_repo else "", "last_hp": self.finance_repo.meta_get("checkup:last_hp", "") if self.finance_repo else "",
+                        "in_bed_rest": sick or medical.in_bed_rest(),
                         "hunger": hunger,
-                        "sick_until": self.finance_repo.meta_get("is_sick_until", "") if self.finance_repo else ""}
+                        "sick_until": str(snap.get("until") or "") or (self.finance_repo.meta_get("is_sick_until", "") if self.finance_repo else "")}
             if str(body.get("action") or "") == "checkup":
                 return await medical.checkup()
             result = await medical.handle_sick_event(
@@ -480,7 +583,10 @@ class ApiMixin:
                 return {"ok": False, "message": "工资模块未就绪"}
             body = await self._read_json()
             action = str(body.get("action") or "state").lower()
-            period = _dt.date.today().strftime("%Y-%m")
+            period_day = _dt.date.today()
+            if period_day.day > 15:
+                period_day = period_day.replace(day=1) + _dt.timedelta(days=32)
+            period = period_day.strftime("%Y-%m")
             if action == "set":
                 self.finance_salary.set_base(int(round(float(body.get("base") or 0) * 100)))
             elif action == "add":

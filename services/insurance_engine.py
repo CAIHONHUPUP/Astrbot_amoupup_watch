@@ -42,7 +42,7 @@ class InsuranceEngine:
         parts = []
         for key, spec in PRODUCTS.items():
             row = d.get(key) or {}
-            parts.append("%s（%s）" % (spec["name"], "生效中" if row.get("active") else "未购买"))  # type: ignore[index]
+            parts.append("%s（%s）" % (spec["name"], "生效中" if row.get("active") else "未购买"))
         return "【商业保险】" + "；".join(parts)
 
     async def buy(self, key, now=None):
@@ -54,8 +54,8 @@ class InsuranceEngine:
         idem = "insurance:%d:%s" % (year, key)
         if (self._data().get(key) or {}).get("year") == year and self.active(key):
             return {"ok": False, "reason": "already"}
-        premium = stable_int("premium:%s:%d" % (key, year), *spec["premium"])  # type: ignore[index]
-        res = await self.finance.expense(premium, "保费：%s" % spec["name"], idem, necessary=True)  # type: ignore[index]
+        premium = stable_int("premium:%s:%d" % (key, year), *spec["premium"])
+        res = await self.finance.expense(premium, "保费：%s" % spec["name"], idem, necessary=True)
         if not isinstance(res, dict) or not res.get("ok"):
             d = self._data()
             d[key] = {"active": False, "grace": True,
@@ -63,14 +63,14 @@ class InsuranceEngine:
                       "year": year, "lapsed": True}
             self._save(d)
             self.finance.nudge_mood({"委屈": 8}, idem + ":lapse")
-            self.finance.small_diary("完蛋了，卡里没钱，%s保费没扣成功，保险失效了……" % spec["name"])  # type: ignore[index]
+            self.finance.small_diary("完蛋了，卡里没钱，%s保费没扣成功，保险失效了……" % spec["name"])
             return {"ok": False, "reason": "insufficient", "lapsed": True}
         d = self._data()
         d[key] = {"active": True, "year": year, "premium": premium}
         self._save(d)
         self.finance.nudge_mood({"委屈": 5}, idem + ":mood")
         self.finance.small_diary("今天又到了交保费的日子，一下子扣了 %s，好心痛，不过就当买个平安吧。" % yuan(premium))
-        return {"ok": True, "premium": premium, "name": spec["name"]}  # type: ignore[index]
+        return {"ok": True, "premium": premium, "name": spec["name"]}
 
     def grace_until(self, key):
         row = self._data().get(key) or {}
@@ -82,8 +82,8 @@ class InsuranceEngine:
         if not row.get("grace"):
             return {"ok": False, "reason": "not_grace"}
         spec = PRODUCTS.get(key) or {}
-        premium = stable_int("premium:%s:%d" % (key, now.year), *(spec.get("premium") or (10000, 10000)))  # type: ignore[attr-defined]
-        res = await self.finance.expense(premium, "补缴保费：%s" % spec.get("name", key), "insurance:repay:%d:%s" % (now.year, key), necessary=True)  # type: ignore[attr-defined]
+        premium = stable_int("premium:%s:%d" % (key, now.year), *(spec.get("premium") or (10000, 10000)))
+        res = await self.finance.expense(premium, "补缴保费：%s" % spec.get("name", key), "insurance:repay:%d:%s" % (now.year, key), necessary=True)
         if not isinstance(res, dict) or not res.get("ok"):
             return {"ok": False, "reason": "insufficient"}
         d = self._data()
@@ -110,7 +110,7 @@ class InsuranceEngine:
         def ok(k):
             row = d.get(k) or {}
             if row.get("grace"):
-                notes.append("%s 宽限期内，请先补缴保费才能理赔" % (PRODUCTS.get(k, {}).get("name") or k))  # type: ignore[attr-defined]
+                notes.append("%s 宽限期内，请先补缴保费才能理赔" % (PRODUCTS.get(k, {}).get("name") or k))
                 return False
             return bool(row.get("active"))
         if ok("e生保") and self_pay_cents > 1000000:
@@ -165,7 +165,7 @@ class InsuranceEngine:
 
     async def poor_diary(self, key="e生保"):
         spec = PRODUCTS.get(key) or {}
-        self.finance.small_diary("今天看到新闻说年轻人患癌概率变高了，我想买份%s，可是卡里只剩一点钱，连保费都不够，呜呜呜。老公，你能帮帮我吗……" % spec.get("name", key))  # type: ignore[attr-defined]
+        self.finance.small_diary("今天看到新闻说年轻人患癌概率变高了，我想买份%s，可是卡里只剩一点钱，连保费都不够，呜呜呜。老公，你能帮帮我吗……" % spec.get("name", key))
 
 
 def build_insurance(plugin):

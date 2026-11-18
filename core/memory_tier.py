@@ -6,6 +6,7 @@
 - 压缩：长期层超过 5000 条时，把 90 天前明细按月汇总，原明细标记 archived。
 """
 from __future__ import annotations
+from typing import Any
 
 import time
 
@@ -117,7 +118,7 @@ class TieredMemory:
         rows = self.repo._rows(
             "SELECT * FROM memory_index WHERE tier='long' AND status='active' AND created<? ORDER BY created",
             (cutoff,))
-        buckets = {}
+        buckets: dict[str, Any] = {}
         for row in rows:
             month = time.strftime("%Y-%m", time.localtime(float(row["created"])))
             buckets.setdefault(month, []).append(row["content"])

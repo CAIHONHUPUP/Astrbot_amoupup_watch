@@ -111,7 +111,7 @@ def test_buy_rejects_insufficient_balance(env, monkeypatch):
     monkeypatch.setattr(ft, "in_session", lambda now: True)
     finance.amo.wallet.cents = 100
     res = asyncio.run(trading.buy("600519", 100, price=100.0))
-    # 钱不够时先被「投资 ≤ 存款 50%」挡住，不会透支
+    # 钱不够时先被「单笔 ≤ 当前现金 50%」挡住，不会透支
     assert res["ok"] is False and ("50%" in res["message"] or "余额不足" in res["message"])
 
 
@@ -151,6 +151,62 @@ def test_invest_cap_is_half_of_deposit(env, monkeypatch):
     # 现金 20,000 元：买 100 股 × 100 元 = 10,000 元（正好 50%）
     ok = asyncio.run(trading.buy("600519", 100, price=100.0, idem="cap1"))
     assert ok["ok"] is True
-    # 再买 100 股，投入变 20,000 / 存款 20,000，超过 50%
+    # 再买 100 股 = 10,000 元，超过当前现金 9,490 的 50%，仍会被拒
     res = asyncio.run(trading.buy("600519", 100, price=100.0, idem="cap2"))
     assert res["ok"] is False and "50%" in res["message"]
+
+
+def _trading_cash(repo, cents):
+    finance = FakeFinance(cents)
+    return Trading(None, FakeRuntime(), repo, finance), finance
+
+
+def test_buy_clips_oversized_order_to_half_cash(env, monkeypatch):
+    """现金 6000 元 → 单笔上限 3000 元：下 400 股（4000 元）应裁到 300 股。"""
+    _, repo, _, _ = env
+    trading, finance = _trading_cash(repo, 600000)
+    monkeypatch.setattr(ft, "in_session", lambda now: True)
+    res = asyncio.run(trading.buy("601818", 400, price=10.0, idem="clip1"))
+    assert res["ok"] is True, res
+    assert repo.position("stock", "601818")["qty"] == 300
+    assert finance.amo.wallet.cents >= 0
+
+
+def test_second_order_allowed_per_order_cap(env, monkeypatch):
+    """旧口径累计超 50% 会拒第二单；新口径只卡单笔，第二单 1000 元 ≤ 当前现金一半。"""
+    _, repo, _, _ = env
+    trading, _ = _trading_cash(repo, 600000)
+    monkeypatch.setattr(ft, "in_session", lambda now: True)
+    assert asyncio.run(trading.buy("601818", 300, price=10.0, idem="po1"))["ok"] is True
+    res = asyncio.run(trading.buy("601988", 100, price=10.0, idem="po2"))
+    assert res["ok"] is True, res
+
+
+def test_reject_when_one_lot_exceeds_half_cash(env, monkeypatch):
+    _, repo, _, _ = env
+    trading, _ = _trading_cash(repo, 600000)
+    monkeypatch.setattr(ft, "in_session", lambda now: True)
+    res = asyncio.run(trading.buy("601988", 100, price=40.0, idem="big1"))
+    assert res["ok"] is False and "50%" in res["message"]
+
+
+def test_incident_20261118_both_orders_fit(env, monkeypatch):
+    """11-18 真实参数：现金 6604.26 元，601988 7.36 元；500 股应裁到 400 股，随后 500 元基金也放得下。"""
+    _, repo, _, _ = env
+    trading, _ = _trading_cash(repo, 660426)
+    monkeypatch.setattr(ft, "in_session", lambda now: True)
+    res = asyncio.run(trading.buy("601988", 500, price=7.36, idem="inc1"))
+    assert res["ok"] is True, res
+    assert repo.position("stock", "601988")["qty"] == 400
+    fund = asyncio.run(trading.subscribe("110020", 50000, nav=1.65, idem="inc2"))
+    assert fund["ok"] is True, fund
+
+
+def test_fund_subscribe_uses_per_order_cap(env, monkeypatch):
+    """已持有 3000 元股票时，500 元基金申购仍应通过（单笔口径）。"""
+    _, repo, _, _ = env
+    trading, _ = _trading_cash(repo, 600000)
+    monkeypatch.setattr(ft, "in_session", lambda now: True)
+    assert asyncio.run(trading.buy("601818", 300, price=10.0, idem="pf1"))["ok"] is True
+    res = asyncio.run(trading.subscribe("110020", 50000, nav=1.5, idem="pf2"))
+    assert res["ok"] is True, res

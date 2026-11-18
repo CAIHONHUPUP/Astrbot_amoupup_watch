@@ -11,15 +11,7 @@ from services.news_api import merge_stock_news, parse_cls, parse_eastmoney
 from models.ledger import FinanceRepo
 from models.db import Store
 
-
-class FakeMemory:
-    def __init__(self):
-        self.written = []
-
-    async def remember(self, content, kind="finance", idem="", verify=True):
-        self.written.append((kind, idem, content))
-        return {"ok": True}
-
+from plugin_fakes import FinanceNewsMemoryFakeMemory as FakeMemory  # noqa: E402
 
 @pytest.fixture()
 def env(tmp_path):
@@ -30,7 +22,6 @@ def env(tmp_path):
     tm = TieredMemory(None, repo, mem)
     yield tm, repo, mem, store
     store.close()
-
 
 def test_parse_eastmoney_jsonp():
     payload = {"result": {"cmsArticleWebOld": [
@@ -43,18 +34,15 @@ def test_parse_eastmoney_jsonp():
     assert len(rows) == 2 and rows[0]["title"] == "茅台业绩超预期"
     assert rows[0]["snippet"] == "营收增长"
 
-
 def test_parse_cls_list():
     payload = {"data": {"roll_data": [{"title": "快讯一", "brief": "摘要一", "ctime": 1}]}}
     rows = parse_cls(json.dumps(payload), 5)
     assert rows and rows[0]["title"] == "快讯一"
 
-
 def test_merge_stock_news():
     items = [{"title": "业绩超预期"}, {"title": "机构上调评级"}, {"title": "北向资金流入"}]
     text = merge_stock_news("600519", items, "2026-11-13")
     assert "600519" in text and "3条" in text and "业绩超预期" in text
-
 
 def test_tier_dedup_and_limits(env):
     tm, repo, mem, _ = env
@@ -63,7 +51,6 @@ def test_tier_dedup_and_limits(env):
     assert len(tm.retrieve(["601398"])) == 1
     assert len(tm.retrieve(["999999"])) == 0
 
-
 def test_short_overwrite(env):
     tm, repo, mem, _ = env
     asyncio.run(tm.overwrite_short("601398", "浮盈 1%", "d1"))
@@ -71,13 +58,11 @@ def test_short_overwrite(env):
     rows = tm.retrieve(["601398"])
     assert len(rows) == 1 and "2%" in rows[0]["content"]
 
-
 def test_news_merge_one_per_day(env):
     tm, repo, mem, _ = env
     asyncio.run(tm.remember("news", "茅台 2条：业绩、评级", "news:2026-11-13:600519", related="600519"))
     asyncio.run(tm.remember("news", "茅台 3条：业绩、评级、资金", "news:2026-11-13:600519", related="600519"))
     assert len([r for r in tm.retrieve(["600519"]) if r["tier"] == "news"]) == 1
-
 
 def test_expired_news_not_retrieved(env):
     tm, repo, _, _ = env
@@ -86,7 +71,6 @@ def test_expired_news_not_retrieved(env):
         "VALUES(?,?,?,?,?,?, 'active')",
         ("old", "news", "旧闻", "600519", time.time() - 10 * 86400, time.time() - 7 * 86400))
     assert not [r for r in tm.retrieve(["600519"]) if r["idem"] == "old"]
-
 
 def test_compress_old_long(env, monkeypatch):
     tm, repo, _, _ = env
@@ -99,7 +83,6 @@ def test_compress_old_long(env, monkeypatch):
     assert tm.compress_long() >= 1
     active = repo._rows("SELECT * FROM memory_index WHERE tier='long' AND status='active'")
     assert any(r["idem"].startswith("compress:") for r in active)
-
 
 def test_30_day_simulation_bounded(env):
     tm, repo, _, _ = env

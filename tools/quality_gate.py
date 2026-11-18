@@ -311,11 +311,26 @@ def check_function_sizes():
     return "functions ok（最长 %s::%s %d 行）" % longest
 
 
-def check_tests():
+ROOT_LEVEL_TESTS = ("test_cross_plugin.py", "test_run.py", "test_simulation.py")
 
-    cmd = [sys.executable, "-m", "pytest", "tests", "-q"]
+
+def check_tests():
+    """tests/ 全量 + 根级三个跨插件/端到端用例，避免根级脚本没人跑。"""
+    missing = [name for name in ROOT_LEVEL_TESTS if not os.path.isfile(os.path.join(ROOT, name))]
+    assert not missing, "根级测试文件缺失：%s" % "、".join(missing)
+    cmd = [sys.executable, "-m", "pytest", "tests"] + list(ROOT_LEVEL_TESTS) + ["-q"]
     subprocess.run(cmd, cwd=ROOT, check=True)
-    return "pytest ok"
+    return "pytest ok（tests + 根级 %d 个）" % len(ROOT_LEVEL_TESTS)
+
+
+def check_mypy_strict():
+    """严格 mypy（--check-untyped-defs）只降不升：超过基线即红。"""
+    script = os.path.join(ROOT, "tools", "mypy_strict.py")
+    result = subprocess.run([sys.executable, script], cwd=ROOT, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", timeout=900)
+    tail = ((result.stdout or "") + (result.stderr or "")).strip().splitlines()
+    assert result.returncode == 0, "严格 mypy 超过基线：\n" + "\n".join(tail[-4:])
+    return tail[-1] if tail else "strict mypy ok"
 
 
 def main():
@@ -324,7 +339,7 @@ def main():
     args = parser.parse_args()
     print("[gate] clean_pycache", clean_pycache())
     checks = [check_compile, check_pyflakes, check_size, check_function_sizes,
-              check_silent_except, check_async_blocking]
+              check_silent_except, check_async_blocking, check_mypy_strict]
     if not args.fast:
         checks.append(check_tests)
     for check in checks:

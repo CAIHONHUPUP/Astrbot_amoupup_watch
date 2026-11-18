@@ -11,6 +11,11 @@ try:
 except ImportError:
     from utils.helpers import stable_int, yuan
 
+try:
+    from ..guard import isolated
+except ImportError:  # 按顶层包加载时
+    from guard import isolated
+
 CURRENT_RATE = 0.002
 FIXED_RATES = {3: 0.013, 6: 0.015, 12: 0.017, 36: 0.023}
 QUARTER_MONTHS = (3, 6, 9, 12)
@@ -44,6 +49,22 @@ class BankEngine:
 
     def total_cents(self):
         return self.current_cents() + self.fixed_cents()
+
+    def _mirror_to_amo(self):
+        """把银行存款摘要镜像到 amo kv，聊天上下文才能知道「一万定期 + 活期多少」。"""
+        try:
+            amo = self.finance._amo()
+            if amo is None:
+                return
+            fixed = [{"amount": int(r.get("amount") or 0), "end": str(r.get("end") or "")}
+                     for r in self.active_fixed_rows()]
+            amo.db.kv_set("bank_summary", {
+                "current": int(self.current_cents()),
+                "fixed": fixed,
+                "updated": _dt.datetime.now().timestamp(),
+            })
+        except Exception as exc:
+            isolated("bank.mirror", exc)
 
     async def deposit(self, amount_cents, term_months=0, now=None, diary=True):
         amount = int(amount_cents or 0)
@@ -81,6 +102,7 @@ class BankEngine:
                 "months": months, "status": "active",
                 "interest_cents": 0, "matured_at": ""})
         self._save(data)
+        self._mirror_to_amo()
         self.finance.nudge_mood({"开心": 6}, "bank:dep:mood")
         if not term_months:
             lines = ["留了 %s 在活期当备用金，以备不时之需。" % yuan(amount),

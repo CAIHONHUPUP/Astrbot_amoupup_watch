@@ -13,15 +13,18 @@
 from __future__ import annotations
 
 import datetime as _dt
-import hashlib
 
 try:
     from ..guard import isolated
     from ..utils.helpers import stable_int, parse_day
+    from ..utils.money import fmt_yuan as yuan
+    from ..utils.money import idem, salary_idem
     from . import bill_flow
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
     from utils.helpers import stable_int, parse_day
+    from utils.money import fmt_yuan as yuan
+    from utils.money import idem, salary_idem
     import services.bill_flow as bill_flow
 
 DEFAULT_BASE_CENTS = 680000          # 6800 元
@@ -37,13 +40,8 @@ THRIFTY_DAYS = 5
 
 
 def _hash_int(text, low, high):
-    digest = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
-    span = max(1, high - low)
-    return low + int(digest[:8], 16) % span
-
-
-def yuan(cents):
-    return "¥%.2f" % (int(cents) / 100.0)
+    """稳定随机（同一个月同一个种子永远给同一个数）；实现已并入 utils.helpers。"""
+    return stable_int(text, low, high)
 
 
 class FinanceSalary:
@@ -109,29 +107,16 @@ class FinanceSalary:
         flag = "salary_rolled:" + str(period)
         if self.repo.meta_get(flag):
             return {"skipped": True}
-        base = self.base_cents()
         made = []
-        roll = _hash_int("late:" + period, 0, 100)
-        late = roll < 25
-        if late:
-            amount = -_hash_int("late-amt:" + period, 5000, 10000)   # 50–100 元
-            self.add_item(period, "deduction", "迟到/早退", amount)
-            made.append(("迟到/早退", amount))
-        sick = _hash_int("leave:" + period, 0, 100) < 20
-        if sick:
-            half = _hash_int("leave-half:" + period, 0, 2) == 0
-            rate = int(round(base / WORK_DAYS))
-            amount = -int(round(rate * (0.5 if half else 1.0)))
-            label = "病假半天" if half else "事假一天"
-            self.add_item(period, "deduction", label, amount)
-            made.append((label, amount))
-        perf = _hash_int("perf:" + period, 0, 100) < 15
-        if perf:
-            pct = _hash_int("perf-pct:" + period, 5, 20) / 100.0
-            amount = -int(round(base * pct))
-            self.add_item(period, "deduction", "绩效不达标(%d%%)" % int(pct * 100), amount)
-            made.append(("绩效不达标", amount))
-        if not late and not sick and _hash_int("full:" + period, 0, 100) < 30:
+        # 2026-11-18 用户明确：迟到/事假/病假不能随机编，只能来自真实事件或 amo 健康状态。
+        try:
+            items = list(self.summary(period).get("items") or [])
+        except Exception:
+            items = []
+        has_absence = any(
+            any(word in str(row.get("label") or "") for word in ("迟到", "早退", "事假", "病假"))
+            for row in items)
+        if not has_absence and _hash_int("full:" + period, 0, 100) < 30:
             amount = _hash_int("full-amt:" + period, 10000, 50000)   # 100–500 元
             self.add_item(period, "bonus", "全勤奖", amount)
             made.append(("全勤奖", amount))
@@ -147,10 +132,10 @@ class FinanceSalary:
         text = ("今天公司%s，月薪从 %s 变成 %s（%+.0f%%），%s。"
                 % ("涨薪了" if up else "降薪了", yuan(old_cents), yuan(new_cents),
                    float(pct) * 100, word))
-        await self._remember(text, "salary:adjust:%s:%s" % (now.isoformat(), int(new_cents)))
+        await self._remember(text, idem("salary:adjust", now.isoformat(), int(new_cents)))
         self.finance.long_diary(text)
         self.finance.nudge_mood({"开心": 12, "兴奋": 8} if up else {"委屈": 12, "难过": 8},
-                                "salary:adjust:%s" % now.isoformat())
+                                idem("salary:adjust", now.isoformat()))
         if not up:
             self.start_thrifty(now)
         return {"up": up, "old": old_cents, "new": new_cents}
@@ -259,6 +244,15 @@ class FinanceSalary:
 
     # ---------- 结算 ----------
     async def settle(self, now, period):
+        # 幂等闸门（Phase 15）：本期已经结算过就直接返回。
+        # 少了这道闸，重复调用会把「年终奖」明细再追加一遍、全勤奖再发一次，
+        # 零工资那档还会重复写日记/永久记忆；钱包虽然按 idem 挡住第二笔钱，
+        # 但返回值会错报成 reason=wallet，上层看不出是「已发过」。
+        try:
+            if self.repo.settled(period, "salary"):
+                return {"ok": False, "reason": "settled", "summary": None}
+        except Exception as exc:      # 老仓储桩没有 settled：当作没结算过
+            isolated("salary.settled", exc)
         # 发薪日：15 号遇周末/节假日顺延到下一个工作日；非工作日绝不结算。
         base = now.date() if hasattr(now, "date") else now
         holiday_set = bill_flow.holidays(self.plugin)
@@ -290,7 +284,7 @@ class FinanceSalary:
         net = int(summary["net_cents"])
         if net <= 0:
             text = facts.salary_zero_fact(int(summary["base_cents"]), net)
-            await self._remember(text, "salary:zero:%s" % period)
+            await self._remember(text, idem("salary:zero", period))
             diary = getattr(self.finance, "small_diary", None)
             if callable(diary):
                 diary(text)
@@ -300,14 +294,14 @@ class FinanceSalary:
             return {"ok": True, "paid": 0, "zero": True, "summary": summary}
         pay_ts = _dt.datetime.combine(pay_day, _dt.time(10, 0)).timestamp()
         try:
-            result = await self.finance.income(net, "工资", "salary:" + period,
+            result = await self.finance.income(net, "工资", salary_idem(period),
                                                salary=True, detail=summary, when_ts=pay_ts)
         except TypeError:  # 老测试桩没有 when_ts / detail 参数
             try:
-                result = await self.finance.income(net, "工资", "salary:" + period,
+                result = await self.finance.income(net, "工资", salary_idem(period),
                                                    salary=True, detail=summary)
             except TypeError:
-                result = await self.finance.income(net, "工资", "salary:" + period, salary=True)
+                result = await self.finance.income(net, "工资", salary_idem(period), salary=True)
         if not result.get("ok"):
             return {"ok": False, "reason": "wallet", "summary": summary}
         balance = int(self.finance.balance_cents() or 0)
@@ -320,10 +314,10 @@ class FinanceSalary:
         else:
             self.finance.long_diary(text)
         if summary["deduction_cents"] > 0:
-            self.finance.nudge_mood({"委屈": 10, "难过": 6}, "salary:cut:%s" % period)
+            self.finance.nudge_mood({"委屈": 10, "难过": 6}, idem("salary:cut", period))
             self.start_thrifty(now)
         elif summary["bonus_cents"] > 0:
-            self.finance.nudge_mood({"开心": 10, "兴奋": 6}, "salary:bonus:%s" % period)
+            self.finance.nudge_mood({"开心": 10, "兴奋": 6}, idem("salary:bonus", period))
         self.repo.mark_settled(period, "salary", str({"net": net}))
         return {"ok": True, "paid": net, "zero": False, "summary": summary}
 

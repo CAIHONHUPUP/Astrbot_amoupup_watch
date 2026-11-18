@@ -8,7 +8,7 @@ omit =
     test_*.py
 
 [report]
-# 2026-11-16 实测 65%，底线 55 → 60（只许往上调）
-fail_under = 60
+# 2026-11-16 实测 65%，底线 55 → 60；2026-11-18 实测 67%，底线 60 → 66（只许往上调）
+fail_under = 75
 show_missing = True
 skip_covered = True
