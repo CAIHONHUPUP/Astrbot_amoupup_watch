@@ -45,6 +45,10 @@ CHEAP_MENUS = {
 DISH_WORDS = ("酸菜鱼", "火锅", "寿司", "烤肉", "烧烤", "日料", "西餐",
               "小龙虾", "麻辣烫", "披萨")
 
+#: 跟朋友/同事/亲戚吃饭（没点名吃什么时可以抽一个饭店菜）
+FRIEND_WORDS = ("朋友", "同事", "表姐", "表妹", "闺蜜", "同学", "聚餐",
+                "一起吃饭", "约我", "请我")
+
 #: 吃饭地点关键词（2026-11-19）
 HOME_WORDS = ("家", "宿舍", "出租屋", "住处", "公寓")
 CANTEEN_WORDS = ("食堂", "饭堂")
@@ -126,6 +130,10 @@ class FinanceDaily:
         for dish in DISH_WORDS:
             if dish in where:
                 return ((dish, 1),)
+        # 朋友/同事约饭但没点名吃什么：从饭店菜里抽一个（约会不抽，等他说具体吃什么）
+        if any(word in where for word in FRIEND_WORDS):
+            index = _hash_int(where + slot, 0, len(DISH_WORDS) - 1)
+            return ((DISH_WORDS[index], 1),)
         zone = self._meal_zone(where)
         if not zone:
             return menu

@@ -67,6 +67,21 @@ class MealZoneTests(unittest.TestCase):
         self.assertEqual(f._menu_for_place("lunch", CHEAP_MENUS["lunch"]),
                          (("火锅", 1),))
 
+    def test_friend_without_dish_draws_restaurant(self):
+        from services.daily_engine import DISH_WORDS
+        f = Fake()
+        f.where = "餐厅 朋友约我吃饭"
+        got = f._menu_for_place("lunch", CHEAP_MENUS["lunch"])
+        self.assertEqual(len(got), 1)
+        self.assertIn(got[0][0], DISH_WORDS)
+
+    def test_date_without_dish_waits_for_him(self):
+        f = Fake()
+        f.where = "商场 和他吃饭"
+        names = [opt[0] for opt in f._menu_for_place("lunch", CHEAP_MENUS["lunch"])]
+        self.assertNotIn("食堂套餐", names)
+        self.assertNotIn("自己做饭", names)
+
     def test_unknown_place_keeps_menu(self):
         f = Fake()
         f.where = ""
