@@ -113,10 +113,16 @@ class WorkEventEngine:
                 "聊天时可以主动吐槽或炫耀，但不要把数字念成流水账。" % mood)
 
     # ---------- 统一链路 ----------
-    async def fire(self, kind, day=None, amount_cents=None, reason="", source="user"):
+    async def fire(self, kind, day=None, amount_cents=None, reason="", source="user", now=None):
         kind = str(kind or "").strip()
         if kind not in LABELS:
             return {"ok": False, "reason": "unknown_kind", "kind": kind}
+        # 2026-11-19：迟到只可能在早晨。下午/晚上从任何来源写进来都会变成
+        # 「在家发呆却被扣 50 块」，时间轴还被切成 15:19-16:00 这种怪块。
+        if kind == KIND_LATE and str(source or "") in ("auto", "medical"):
+            moment = now or _dt.datetime.now()
+            if moment.hour < 6 or moment.hour >= 11:
+                return {"ok": False, "reason": "late_out_of_window", "kind": kind}
         target = self.day_of(day)
         day_text = target.isoformat()
         period = salary_period(target)
