@@ -41,6 +41,11 @@ CHEAP_MENUS = {
 }
 
 
+#: 吃饭地点关键词（2026-11-19）
+HOME_WORDS = ("家", "宿舍", "出租屋", "住处", "公寓")
+CANTEEN_WORDS = ("食堂", "饭堂")
+
+
 def _hash_int(text, low, high):
     """稳定随机；实现已并入 utils.helpers（Phase 15 去重）。"""
     return stable_int(text, low, high)
@@ -83,8 +88,8 @@ class FinanceDaily:
         except Exception:
             return False
 
-    def _place_text(self):
-        """她此刻在哪（读 amo 日程）；拿不到就返回空串。"""
+    def _where_text(self):
+        """她此刻在哪、在干什么（读 amo 日程）；地点和活动拼在一起判断，拿不到返回空串。"""
         amo = self._amo()
         if amo is None:
             return ""
@@ -93,18 +98,38 @@ class FinanceDaily:
         except Exception as exc:
             isolated("daily.place", exc)
             return ""
-        return str(act.get("place") or "")
+        return "%s %s" % (act.get("place") or "", act.get("activity") or "")
+
+    def _meal_zone(self, place):
+        """吃饭地点分三档：家里 / 食堂 / 外面；读不到地点返回空串。"""
+        if not place:
+            return ""
+        if any(word in place for word in HOME_WORDS):
+            return "home"
+        if any(word in place for word in CANTEEN_WORDS):
+            return "canteen"
+        return "outside"
 
     def _menu_for_place(self, slot, menu):
-        """按地点筛菜单：不在家不「自己做饭」，在家不「食堂套餐」。"""
+        """按地点筛菜单（2026-11-19）：
+
+        食堂只有食堂套餐/米饭套餐/面条；在家不出现食堂套餐；
+        在外面（跟人下馆子）既不自己做饭、也不吃食堂。
+        """
         if slot not in ("lunch", "dinner"):
             return menu
-        place = self._place_text()
-        if not place:
+        zone = self._meal_zone(self._where_text())
+        if not zone:
             return menu
-        at_home = any(word in place for word in ("家", "宿舍", "出租屋", "住处", "公寓"))
-        drop = "食堂套餐" if at_home else "自己做饭"
-        filtered = tuple(opt for opt in menu if drop not in opt)
+        if zone == "canteen":
+            allow = ("食堂套餐", "米饭套餐", "面条")
+            filtered = tuple(opt for opt in menu
+                             if any(name in allow for name in opt if isinstance(name, str)))
+        elif zone == "home":
+            filtered = tuple(opt for opt in menu if "食堂套餐" not in opt)
+        else:
+            filtered = tuple(opt for opt in menu
+                             if "食堂套餐" not in opt and "自己做饭" not in opt)
         return filtered or menu
 
     def _in_window(self, slot, now):
