@@ -36,8 +36,8 @@ MENUS = {
 #: 省钱模式（被扣钱/降薪后几天）：只吃便宜的
 CHEAP_MENUS = {
     "breakfast": (("包子", 1, "白粥", 1), ("白粥", 1), ("包子", 1)),
-    "lunch": (("面条", 1), ("自己做饭", 1)),
-    "dinner": (("自己做饭", 1), ("面条", 1)),
+    "lunch": (("面条", 1), ("自己做饭", 1), ("食堂套餐", 1)),
+    "dinner": (("自己做饭", 1), ("面条", 1), ("食堂套餐", 1)),
 }
 
 
@@ -96,13 +96,15 @@ class FinanceDaily:
         return str(act.get("place") or "")
 
     def _menu_for_place(self, slot, menu):
-        """不在家就别「自己做饭」：换成同价位的现成饭（2026-11-19 食堂记账成自己做饭）。"""
+        """按地点筛菜单：不在家不「自己做饭」，在家不「食堂套餐」。"""
         if slot not in ("lunch", "dinner"):
             return menu
         place = self._place_text()
-        if not place or any(word in place for word in ("家", "宿舍", "出租屋", "住处", "公寓")):
+        if not place:
             return menu
-        filtered = tuple(opt for opt in menu if "自己做饭" not in opt)
+        at_home = any(word in place for word in ("家", "宿舍", "出租屋", "住处", "公寓"))
+        drop = "食堂套餐" if at_home else "自己做饭"
+        filtered = tuple(opt for opt in menu if drop not in opt)
         return filtered or menu
 
     def _in_window(self, slot, now):

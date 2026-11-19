@@ -36,7 +36,7 @@ CATEGORY_LABELS = {
 #: 商品 → 分类
 ITEM_CATEGORY = {
     "豆浆": "food", "肠粉": "food", "包子": "food", "油条": "food", "白粥": "food",
-    "快餐": "food", "面条": "food", "米饭套餐": "food", "自己做饭": "food",
+    "快餐": "food", "面条": "food", "米饭套餐": "food", "自己做饭": "food", "食堂套餐": "food",
     "水果": "food", "牛奶": "food", "黄焖鸡": "food",
     "公交": "transport", "地铁": "transport", "共享单车": "transport", "打车": "transport",
     "洗衣液": "daily", "牙膏": "daily", "纸巾": "daily", "洗发水": "daily",
