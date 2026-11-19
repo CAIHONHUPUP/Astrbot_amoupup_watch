@@ -17,11 +17,13 @@ try:
     from ..services.fund_market import FundMarket
     from ..services.market_api import fetch_quotes
     from ..utils.helpers import is_trading_day
+    from ..utils.clock import today_str as _today_str
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
     from services.fund_market import FundMarket
     from services.market_api import fetch_quotes
     from utils.helpers import is_trading_day
+    from utils.clock import today_str as _today_str
 
 SLOTS = ((9, 30, "morning"), (11, 35, "noon"), (14, 50, "close"))
 CANDIDATES = ("600519", "000001", "300750", "600036")
@@ -58,7 +60,7 @@ class FinanceDecision:
         quotes = await self.runtime.run_io(fetch_quotes, list(codes), timeout=12) or {}
         # 收盘价快照（每天一次）：赌徒补仓要看“连跌 3 天”
         try:
-            today = _dt.date.today().isoformat()
+            today = _today_str()
             for code, quote in (quotes or {}).items():
                 price = quote.get("price") if isinstance(quote, dict) else None
                 if not price:

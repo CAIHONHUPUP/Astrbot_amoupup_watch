@@ -54,7 +54,9 @@ def test_accept_settles_whole_chain():
     assert fin.schedules[0]["start"] == "14:00" and fin.schedules[0]["end"] == "17:00"
     assert fin.moods[0]["开心"] > 0 and fin.moods[0]["疲惫"] < 0
     assert fin.memories and fin.diaries
-    assert repo.npc["柳如烟"]["last_event"] == note
+    # 2026-11-19：last_event 只存第三人称客观句，绝不再把她的第一人称日记回灌给模型
+    assert repo.npc["柳如烟"]["last_event"].startswith("她答应了柳如烟")
+    assert "我" not in repo.npc["柳如烟"]["last_event"]
     assert eng.pending_invite() is None
     assert res["steps"]["wallet"] and res["steps"]["schedule"]
 
@@ -75,7 +77,8 @@ def test_reject_records_reason_without_charge():
     assert res["ok"]
     assert fin.cash == 500000 and fin.expenses == [] and fin.schedules == []
     assert fin.moods[0] == {"郁闷": 4}
-    assert repo.npc["柳如烟"]["last_event"] == note
+    assert repo.npc["柳如烟"]["last_event"].startswith("她婉拒了柳如烟")
+    assert "我" not in repo.npc["柳如烟"]["last_event"]
     assert eng.pending_invite() is None
 
 
@@ -177,13 +180,14 @@ def test_scheduled_full_chain_with_composer_and_decider():
         seen["facts"] = facts
         return {"action": "accept", "ask": "如烟约我下午逛商场",
                 "reason": "想出去透透气",
+                "now": "好呀，下午商场见",
                 "note": "答应了如烟，下午去逛商场"}
 
     out = asyncio.run(eng.scheduled(now=SAT, decider=decider, composer=_composer()))
     assert out["invite"] and out["decision"] and out["decision"]["ok"]
     assert "余额" in seen["facts"] and "疲惫值" in seen["facts"]
     assert fin.cash < 500000 and fin.schedules
-    assert out["push"] == ["答应了如烟，下午去逛商场"]
+    assert out["push"] == ["好呀，下午商场见"]
 
 
 def test_scheduled_without_llm_keeps_pending():

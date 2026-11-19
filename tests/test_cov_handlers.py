@@ -20,6 +20,7 @@ if ROOT not in sys.path:
 
 from api import handlers as handlers_mod  # noqa: E402
 from api.handlers import ApiMixin, _ledger_date_time, _ledger_ts  # noqa: E402
+from utils.clock import today_str as _today_str  # noqa: E402
 
 
 class Host(ApiMixin):
@@ -166,7 +167,7 @@ def test_funds_list_and_refreshed_and_errors():
     repo = FundRepo()
     repo.data["fund_refresh:2026-11-18"] = "2026-11-18 14:50"
     data = run(Host(finance_repo=repo)._api_funds())
-    assert data["ok"] is True and data["day"] == dt.date.today().isoformat()
+    assert data["ok"] is True and data["day"] == _today_str()
     first = data["items"][0]
     assert first["nav"] == pytest.approx(1.2345)
     assert first["estimate"] == pytest.approx(1.24)

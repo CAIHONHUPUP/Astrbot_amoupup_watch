@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as _dt
 import difflib
 import json
+import logging
 import re
 import time
 import uuid
@@ -40,6 +41,8 @@ except ImportError:  # 按顶层包/单文件加载时
                                        invite_idem, invite_status, is_off_day,
                                        live_invite, minutes, parse_when, relative_label,
                                        retime_ask, same_invite)
+
+logger = logging.getLogger("watch.social")
 
 #: 唯一合法的 7 个核心 NPC
 SEED = tuple((item["name"], item["circle"], item["relation"], item["affinity"])
@@ -100,10 +103,109 @@ def _code_word(token):
     return ACTION_WORDS.get(str(token or "").strip().strip("_").lower(), "")
 
 
-def humanize_dynamic(kind, payload):
+#: 她说自己正在生病时的常见说法；只有当前确实健康时才用它拦「病句」。
+_SICK_CLAIM = re.compile(
+    r"我[^，。；！？]{0,4}(?:发烧|烧着|烧得|低烧|感冒|咳嗽|生病|病倒|还烧)"
+    r"|你[^，。；！？]{0,4}(?:发烧|烧着|烧得|低烧|感冒|咳嗽|生病|病倒|还烧)")
+
+#: 老数据迁移标记：第一人称的 last_event 只清一次
+LAST_EVENT_MIGRATION = "social:last_event_obj_v1"
+
+#: 能陪 health_bridge 认可的生病状态；这些之外都按健康处理（健康时才拦病句）
+SICK_STATUS = ("轻微不适", "感冒", "低烧", "发烧", "肠胃炎")
+
+
+def claims_sick(text):
+    """这句话是不是在说她（我/你）正病着；给健康守卫用，纯函数。"""
+    return bool(_SICK_CLAIM.search(str(text or "")))
+
+
+def _when_label(day, start=""):
+    """「今天 18:30」/「11-21 14:00」这种短时间标签。"""
+    text = str(day or "")
+    label = text[5:] if len(text) >= 10 else text
+    try:
+        target = _dt.date.fromisoformat(text) if text else None
+        if target == _dt.date.today():
+            label = "今天"
+        elif target == _dt.date.today() + _dt.timedelta(days=1):
+            label = "明天"
+    except Exception:
+        label = text[5:] if len(text) >= 10 else text
+    start = str(start or "")
+    if label and start:
+        return "%s %s" % (label, start)
+    return label or start
+
+
+def objective_last(kind, npc="", topic="", day="", start=""):
+    """写进 npc_relations.last_event 的「上一次」：永远是第三人称客观事实。
+
+    2026-11-19 修复：以前这里存的是她第一人称的日记句，下一轮又被当成
+    「这个 NPC 最近的状态」喂回模型，模型把里面的「我发烧了」当成她现在的身体，
+    健康恢复后仍一直写她生病。客观句既能给面板看懂，也不会再被误读。
+    """
+    name = str(npc or "")
+    what = str(topic or "").strip()
+    when = _when_label(day, start)
+    tail = " ".join(x for x in (when, what) if x)
+    suffix = ("（%s）" % tail) if tail else ""
+    k = str(kind or "")
+    if k.endswith(":accept"):
+        return "她答应了%s的邀约%s" % (name, suffix)
+    if k.endswith(":reject"):
+        return "她婉拒了%s的邀约%s" % (name, suffix)
+    if k.endswith(":red"):
+        return "%s给她发了个红包" % name
+    if k.endswith(":repay"):
+        return "%s把钱还了" % name
+    if k.endswith(":default"):
+        return "%s借的钱一直没还" % name
+    if k.endswith(":criticism"):
+        return "%s批评了她" % name
+    return ("%s那边有点动静" % name) if name else ""
+
+
+def plan_line(npc, day="", start="", topic="", place=""):
+    """刚答应时她说的那句：说的是「接下来要去」，不是「已经去过」。"""
+    when = _when_label(day, start)
+    topic = str(topic or "").strip()
+    place = str(place or "").strip()
+    if topic:
+        target = topic if topic.startswith("去") else "去" + topic
+    elif place:
+        target = "去" + place
+    else:
+        target = "见个面"
+    if when:
+        return "答应了%s，%s %s" % (npc, when, target)
+    return "答应了%s，回头%s" % (npc, target)
+
+
+def _dynamic_text(kind, payload, now=None):
+    """动态正文取哪一句：答应/赴约这类「未来的事」，到点前只说约定，事后才说回忆。"""
+    k = str(kind or "")
+    said = str(payload.get("text") or "").strip()
+    note = str(payload.get("note") or "").strip()
+    fallback = str(payload.get("fallback") or "").strip()
+    if k.endswith(":accept"):
+        day = str(payload.get("day") or "")
+        end = str(payload.get("end") or payload.get("start") or "")
+        until = _ts(day, end, 0.0) if (day and end) else 0.0
+        current = float(now if now is not None else time.time())
+        if until and current < until:
+            return said or plan_line(str(payload.get("npc") or ""), day,
+                                     str(payload.get("start") or ""),
+                                     str(payload.get("topic") or ""),
+                                     str(payload.get("place") or ""))
+        return note or said or fallback
+    return said or note or fallback
+
+
+def humanize_dynamic(kind, payload, now=None):
     """把一条动态翻成人话；翻不出来就返回空串（宁可少一条也不露代码）。"""
     payload = payload if isinstance(payload, dict) else {}
-    raw = str(payload.get("text") or payload.get("fallback") or "").strip()
+    raw = _dynamic_text(kind, payload, now)
     status = str(payload.get("status") or "").strip()
     text = humanize_numbers(raw).strip()
     if not text or _CODE_ONLY.match(text):
@@ -189,6 +291,7 @@ class SocialEngine:
                 self.repo.upsert_npc(name, circle, relation, affinity, "#社交_" + name)
         self._prune()
         self._clean_npc_text()
+        self._migrate_last_event()
         try:
             npc_roster.refresh_status(self.repo)
         except Exception as exc:
@@ -223,6 +326,42 @@ class SocialEngine:
                         self.repo.set_npc_status(name, fixed, float(row.get("status_at") or 0))
                 except Exception as exc:
                     isolated("social.npc_text.write", exc)
+
+    def _migrate_last_event(self):
+        """老数据里的 last_event 是她第一人称的日记句，会被 compose 当成她现在的状态。
+
+        2026-11-19：带「我」的旧文本只清一次（面板回落 NPC 自己的 status），
+        之后新写入的 last_event 全是第三人称客观句；清过就不再重复扫。
+        """
+        if self.repo is None:
+            return 0
+        try:
+            if str(self.repo.meta_get(LAST_EVENT_MIGRATION, "")) == "1":
+                return 0
+        except Exception:
+            return 0
+        try:
+            rows = self.repo.npcs()
+        except Exception as exc:
+            isolated("social.last_event.read", exc)
+            return 0
+        cleared = 0
+        for row in rows:
+            text = str((row or {}).get("last_event") or "")
+            if not text or "我" not in text:
+                continue
+            try:
+                self.repo.set_npc_event(str(row.get("name") or ""), "")
+                cleared += 1
+            except Exception as exc:
+                isolated("social.last_event.migrate", exc)
+        try:
+            self.repo.meta_set(LAST_EVENT_MIGRATION, "1")
+        except Exception as exc:
+            isolated("social.last_event.flag", exc)
+        if cleared:
+            logger.info("[WATCH] 旧 last_event 已清成第三人称：%d 条", cleared)
+        return cleared
 
     def _prune(self):
         if getattr(self, "_pruned", False):
@@ -433,6 +572,33 @@ class SocialEngine:
         except Exception:
             return "平静"
 
+    def _her_health(self):
+        """她现在的真实身体状态（能陪是唯一权威；读不到就空着，绝不猜）。"""
+        amo = None
+        try:
+            getter = getattr(self.finance, "_amo", None)
+            amo = getter() if callable(getter) else None
+        except Exception as exc:
+            isolated("social.health.amo", exc)
+            amo = None
+        if amo is None:
+            try:
+                amo = self._bridge().resolve()
+            except Exception as exc:
+                isolated("social.health.bridge", exc)
+                amo = None
+        if amo is None:
+            return ""
+        try:
+            try:
+                from .health_bridge import get_sick_status
+            except ImportError:
+                from services.health_bridge import get_sick_status
+            return str(get_sick_status(amo) or "")
+        except Exception as exc:
+            isolated("social.health.read", exc)
+            return ""
+
     def _windows(self, day):
         fn = getattr(self.finance, "schedule_windows", None)
         if not callable(fn):
@@ -504,11 +670,15 @@ class SocialEngine:
                                              row.get("activity") or ""))
         her = "余额 %s，疲惫值 %d，心情%s" % (human_money(self._cash()), self._fatigue(),
                                              self._mood_word())
+        health = self._her_health()
+        if health:
+            her += "，身体%s" % health
         lines = []
         for row in rows:
-            lines.append("%s（%s，好感 %s）：%s" % (row.get("name"), row.get("relation"),
-                                                    row.get("affinity"),
-                                                    _brief_status(row)))
+            # 对方自己的近况（第三人称客观记录）；她的身体只看 her_state 里的真实健康
+            lines.append("%s（%s，好感 %s）最近一次：%s" % (row.get("name"), row.get("relation"),
+                                                          row.get("affinity"),
+                                                          _brief_status(row)))
         return {"now": now.strftime("%Y-%m-%d %H:%M %A"),
                 "day_facts": "今天是 %s（%s）" % (now.strftime("%Y-%m-%d %A"), _day_label(now.date())),
                 "npc": "候选（自己挑一个最合适的）",
@@ -683,6 +853,9 @@ class SocialEngine:
         lines.append("- 你现在的可用余额：%s（真实余额，不许编）" % human_money(cash))
         lines.append("- 你现在的疲惫值：%d（0 不累，100 累垮）" % self._fatigue())
         lines.append("- 你现在的心情：%s" % self._mood_word())
+        health = self._her_health()
+        if health:
+            lines.append("- 你现在的身体：%s（这是真实状态；不是这里写的，就不许说自己生病）" % health)
         if inv.get("deferred"):
             lines.append("（你刚才在约会/睡觉，手机静音了，现在才看到这条消息。）")
         if str(inv.get("day") or "") != now.date().isoformat():
@@ -776,7 +949,7 @@ class SocialEngine:
         return inv
 
     async def accept_invite(self, npc="", place="", amount_cents=0, note="", reason="",
-                            start="", end="", day="", token="", about_user="", ledger_line=""):
+                            start="", end="", day="", token="", about_user="", ledger_line="", now_line=""):
         inv = self._pending_for_decision()
         if not inv:
             return {"ok": False, "reason": "no_invite", "message": "现在没有待回的邀约"}
@@ -866,29 +1039,43 @@ class SocialEngine:
             if begin <= time.time() <= until:
                 steps["current_action"] = bool(self.finance.set_current_action(
                     thing, until, place=sched["place"], zone=str(inv.get("zone") or "restaurant")))
-        text = humanize_numbers(npc_roster.sanitize(note or reason or "", name))
-        if not text:
-            text = self.fallback_line("social:accept", npc=name, topic=label,
-                                      place=sched.get("place") or "", start=use_start,
-                                      end=use_end, amount_cents=cost)
+        place_text = sched.get("place") or inv.get("place") or ""
+        health = self._her_health()
+        note_text = humanize_numbers(npc_roster.sanitize(note or reason or "", name))
+        said = humanize_numbers(npc_roster.sanitize(now_line or "", name))
+        if health and health not in SICK_STATUS and claims_sick(said):
+            isolated("social.health_claim", RuntimeError("accept-now:" + str(said)[:40]))
+            said = ""
+        if not said:
+            said = plan_line(name, day_text, use_start, label, place_text)
+        if health and health not in SICK_STATUS and claims_sick(note_text):
+            isolated("social.health_claim", RuntimeError("accept-note:" + str(note_text)[:40]))
+            note_text = objective_last("social:accept", name, label, day_text, use_start)
+        if not note_text:
+            note_text = said
         about = npc_roster.sanitize(about_user, name)
         if about and not any(word in about for word in ("老公", "他", "你", "亲爱的", "对象")):
             about = ""
-        self.repo.set_npc_event(name, text)
-        self.record("social:accept", name, text, status="accepted", amount_cents=cost,
+        # last_event 只写第三人称客观事实：第一人称日记会被下一次 compose 当成她现在的状态
+        self.repo.set_npc_event(name, objective_last("social:accept", name, label,
+                                                     day_text, use_start))
+        self.record("social:accept", name, said, status="accepted", amount_cents=cost,
                     day=day_text,
-                    extra={"kind": kind, "place": sched.get("place") or inv.get("place") or "",
+                    extra={"kind": kind, "place": place_text,
                            "start": use_start, "end": use_end,
-                           "about_user": about, "ledger_line": reason_text},
-                    topic=label, place=sched.get("place") or "", start=use_start, end=use_end,
+                           "topic": label, "about_user": about,
+                           "ledger_line": reason_text, "note": note_text},
+                    topic=label, place=place_text, start=use_start, end=use_end,
                     idem="evt:accept:" + str(inv.get("token") or name))
-        memory = self._sentence(text + ((" 她还聊起你：" + about) if about else ""))
+        plan = plan_line(name, day_text, use_start, label, place_text)
+        memory = self._sentence(plan + ((" 她还聊起你：" + about) if about else ""))
         steps["memory"] = await self._memory(memory, idem + ":mem")
         steps["diary"] = self._diary(memory, name)
         self.clear_invite()
         self.mark_resolved(inv.get("token"))
-        return {"ok": True, "npc": name, "cost": cost, "note": text, "line": text,
-                "about_user": about, "invite": inv, "schedule": sched, "steps": steps}
+        return {"ok": True, "npc": name, "cost": cost, "note": note_text, "line": said,
+                "plan": plan, "about_user": about, "invite": inv, "schedule": sched,
+                "steps": steps}
 
     async def reject_invite(self, reason="", note="", token=""):
         inv = self._pending_for_decision()
@@ -901,6 +1088,10 @@ class SocialEngine:
             return {"ok": False, "reason": "unknown_npc", "message": "这个人不在你的社交圈里"}
         why = str(reason or "").strip()
         text = humanize_numbers(npc_roster.sanitize(note or why or "", name))
+        health = self._her_health()
+        if health and health not in SICK_STATUS and claims_sick(text):
+            isolated("social.health_claim", RuntimeError("reject:" + str(text)[:40]))
+            text = ""
         if not text:
             text = self.fallback_line("social:reject", npc=name,
                                       topic=str(inv.get("topic") or ""))
@@ -911,7 +1102,10 @@ class SocialEngine:
         else:
             deltas = {"郁闷": 3}
         self._mood(deltas, "social:reject:" + str(inv.get("token") or name))
-        self.repo.set_npc_event(name, text)
+        self.repo.set_npc_event(name, objective_last("social:reject", name,
+                                                     str(inv.get("topic") or ""),
+                                                     str(inv.get("day") or ""),
+                                                     str(inv.get("start") or "")))
         self.record("social:reject", name, text, status="rejected",
                     day=str(inv.get("day") or ""),
                     extra={"kind": inv.get("kind"), "reason": why},
@@ -964,7 +1158,7 @@ class SocialEngine:
         fallback = self.fallback_line("social:red", npc="妈妈", amount_cents=amount)
         text = await self._narrate({"action": "red_packet", "npc": "妈妈",
                                     "amount": human_money(amount)}, fallback)
-        self.repo.set_npc_event("妈妈", text)
+        self.repo.set_npc_event("妈妈", objective_last("social:red", "妈妈"))
         self.record("social:red", "妈妈", text, status="received", amount_cents=amount, day=day)
         self._diary(text, "妈妈")
         self.repo.mark_task(key, "red_packet")
@@ -981,7 +1175,7 @@ class SocialEngine:
         if not text:
             text = await self._narrate({"action": "criticism", "npc": name,
                                         "npc_status": str(row.get("status") or "")}, fallback)
-        self.repo.set_npc_event(name, text)
+        self.repo.set_npc_event(name, objective_last("social:criticism", name))
         self.record("social:criticism", name, text, status="happened", day=day)
         self._diary(text, name)
         return {"ok": True, "npc": name, "text": text}
@@ -1026,6 +1220,7 @@ class SocialEngine:
             result = await self.accept_invite(
                 amount_cents=int(round(float(verdict.get("amount") or 0) * 100)),
                 note=verdict.get("note") or "", reason=verdict.get("reason") or "",
+                now_line=verdict.get("now") or "",
                 about_user=verdict.get("about_user") or "",
                 ledger_line=verdict.get("ledger_line") or "")
         elif action == "reject":
@@ -1095,7 +1290,7 @@ class SocialEngine:
                 fallback = self.fallback_line("social:repay", npc=npc, amount_cents=amount)
                 text = await self._narrate({"action": "repay", "npc": npc,
                                             "amount": human_money(amount)}, fallback)
-                self.repo.set_npc_event(npc, text)
+                self.repo.set_npc_event(npc, objective_last("social:repay", npc))
                 self.record("social:repay", npc, text, status="paid", amount_cents=amount, day=today)
                 self._diary(text, npc)
             else:
@@ -1104,7 +1299,7 @@ class SocialEngine:
                 fallback = self.fallback_line("social:default", npc=npc, amount_cents=amount)
                 text = await self._narrate({"action": "default", "npc": npc,
                                             "amount": human_money(amount)}, fallback)
-                self.repo.set_npc_event(npc, text)
+                self.repo.set_npc_event(npc, objective_last("social:default", npc))
                 self.record("social:default", npc, text, status="defaulted", amount_cents=amount, day=today)
                 self._diary(text, npc)
                 await self._memory(self._sentence(text), key + ":mem")

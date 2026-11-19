@@ -20,8 +20,10 @@ except Exception:  # 离线单测 / 直接按文件导入
 
 try:  # 包模式
     from ..guard import isolated
+    from ..utils.clock import now as _clock_now
 except ImportError:  # 直接按文件加载
     from guard import isolated
+    from utils.clock import now as _clock_now
 
 
 async def process_pending(plugin):
@@ -72,7 +74,7 @@ async def finance_tick(plugin):
         try:
             bill_flow.create_due(plugin)
             await bill_flow.overdue_tick(plugin)
-            hour = time.localtime().tm_hour
+            hour = _clock_now().hour
             if 7 <= hour < 24:
                 line = bill_flow.prompt_line(plugin)
                 survival = bill_flow.survival_line(plugin)

@@ -121,6 +121,10 @@ def test_sell_needs_t_plus_1(env, monkeypatch):
     asyncio.run(trading.buy("600519", 100, price=100.0, idem="b2"))
     res = asyncio.run(trading.sell("600519", 100, price=105.0))
     assert res["ok"] is False and "T+1" in res["message"]
+    # T+1 到期：把「今天」拨到 ready_day 当天，定时任务才会把份额放出来。
+    # （2026-11-19：refresh_available 修好 ready_day 过滤前，这里一直靠 bug 立即放行。）
+    monkeypatch.setattr(trading, "_day",
+                        lambda: repo.position("stock", "600519")["ready_day"])
     trading.refresh_available()
     pos = repo.position("stock", "600519")
     assert pos["available"] == 100

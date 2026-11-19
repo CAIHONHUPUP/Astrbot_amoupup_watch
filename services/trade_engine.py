@@ -13,9 +13,11 @@ import inspect
 
 try:
     from ..guard import isolated
+    from ..utils.clock import now as _clock_now
     from ..utils.helpers import fund_cutoff, in_session, next_trading_day
 except ImportError:  # 按文件/顶层包加载时
     from guard import isolated
+    from utils.clock import now as _clock_now
     from utils.helpers import fund_cutoff, in_session, next_trading_day
 from .market_api import fetch_quotes
 try:
@@ -58,7 +60,8 @@ class Trading:
 
     # ---------- 公共 ----------
     def _now(self):
-        return _dt.datetime.now()
+        """统一走 utils.clock（弱点2）：全量测试冻结时间时，交易链路跟着冻结。"""
+        return _clock_now()
 
     def _wallet(self):
         amo = self.finance._amo()

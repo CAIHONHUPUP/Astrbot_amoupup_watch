@@ -32,8 +32,9 @@ class FixedDT(dt.datetime):
     @classmethod
     def now(cls, tz=None): return dt.datetime(2026, 11, 16, 10, 0)
 
-def test_buy_uses_explicit_price():
-    te._dt = types.SimpleNamespace(datetime=FixedDT, date=dt.date, timedelta=dt.timedelta, time=dt.time)
+def test_buy_uses_explicit_price(monkeypatch):
+    # 交易链路已经统一走 clock（弱点2），这里直接钉住 clock，不再替换模块的 datetime
+    monkeypatch.setattr(te, "_clock_now", lambda: dt.datetime(2026, 11, 16, 10, 0))
     tmp = tempfile.mkdtemp(prefix="trade-")
     store = Store(tmp); store.init()
     t = Trading(P(), Runtime(), FinanceRepo(store), Link())

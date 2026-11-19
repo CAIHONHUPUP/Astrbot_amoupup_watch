@@ -21,8 +21,10 @@ except Exception:  # 离线测试
 
 try:
     from ..guard import isolated
+    from ..utils.clock import today_str as _today_str
 except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
+    from utils.clock import today_str as _today_str
 
 
 def _ledger_ts(value):
@@ -111,7 +113,7 @@ class ApiMixin:
             repo = getattr(self, "finance_repo", None)
             if repo is None:
                 return {"ok": False, "message": "账本还没准备好"}
-            day = _dt.date.today().isoformat()
+            day = _today_str()
             rows = repo.fund_quotes(day)
             items = [{
                 "code": row.get("code"),

@@ -21,7 +21,9 @@ class FinanceRepo:
 
     # ---------- 持仓 ----------
     def positions(self, kind=""):
-        sql = ("SELECT kind, code, name, qty, available, cost_cents, last_cents, updated "
+        # ready_day 必须一起取出来：trade_engine.refresh_available 靠它判断 T+1/T+2
+        # 有没有到期。漏了这列，排队中的份额在下一次 tick 就会被当成已到期放行。
+        sql = ("SELECT kind, code, name, qty, available, cost_cents, last_cents, updated, ready_day "
                "FROM positions")
         params = ()
         if kind:

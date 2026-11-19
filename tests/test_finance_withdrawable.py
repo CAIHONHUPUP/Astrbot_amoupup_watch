@@ -71,6 +71,9 @@ def test_sell_cash_now_withdrawable_t_plus_1(env, monkeypatch):
     trading, repo, finance, _ = env
     monkeypatch.setattr(ft, "in_session", lambda now: True)
     asyncio.run(trading.buy("601398", 100, price=5.0, idem="b1"))
+    # T+1 到期：把「今天」拨到 ready_day 当天再放行，别再依赖 tick 立即放行。
+    monkeypatch.setattr(trading, "_day",
+                        lambda: repo.position("stock", "601398")["ready_day"])
     trading.refresh_available()
     cash_before = finance.amo.wallet.balance("cash")
     asyncio.run(trading.sell("601398", 100, price=6.0, idem="s1"))
