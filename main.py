@@ -111,7 +111,7 @@ SCHEMA_VERSION = _load(_PKG, "models.db", "SCHEMA_VERSION")
 
 PLUGIN_NAME = "Astrbot_amoupup_watch"
 DISPLAY_NAME = "我能永远守护你"
-PLUGIN_VERSION = "1.2.7"
+PLUGIN_VERSION = "1.2.8"
 API_VERSION = "1.0"
 FEATURES: list[str] = ["diag", "finance"]
 

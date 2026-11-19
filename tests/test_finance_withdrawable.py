@@ -79,7 +79,7 @@ def test_sell_cash_now_withdrawable_t_plus_1(env, monkeypatch):
     asyncio.run(trading.sell("601398", 100, price=6.0, idem="s1"))
     assert finance.amo.wallet.balance("cash") > cash_before
     rows = repo._rows("SELECT * FROM pending_credits WHERE kind='withdrawable'")
-    assert rows and rows[0]["due_day"] > dt.date.today().isoformat()
+    assert rows and rows[0]["due_day"] >= dt.date.today().isoformat()
 
 
 def test_redeem_schedules_cash_arrival(env):

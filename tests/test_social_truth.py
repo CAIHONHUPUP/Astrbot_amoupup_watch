@@ -47,7 +47,11 @@ def _composer(**over):
     return composer
 
 
-def _invite(eng, now=NOW, **over):
+def _invite(eng, now=None, **over):
+    base = dt.datetime.now() + dt.timedelta(days=1)
+    over.setdefault("day", base.date().isoformat())
+    if now is None:
+        now = base.replace(hour=12, minute=0, second=0, microsecond=0)
     out = asyncio.run(eng.create_invite(now=now, composer=_composer(**over)))
     assert out["ok"], out
     return out["invite"]

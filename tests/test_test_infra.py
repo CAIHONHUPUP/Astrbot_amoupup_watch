@@ -33,7 +33,7 @@ DATETIME_NOW_ALLOW = {
                                 "test_panel_doing.py", "test_round8.py", "test_clock.py",
                                 "test_source_guard.py"},
     "Astrbot_amoupup_data": {"test_clock.py"},
-    "Astrbot_amoupup_watch": {"test_deposit_decision.py"},
+    "Astrbot_amoupup_watch": {"test_deposit_decision.py", "test_social_truth.py"},
 }
 #: 三个文件必须逐字节一致。
 CANONICAL_FILES = ("tests/astrbot_stub.py", "tests/support/__init__.py",

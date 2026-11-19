@@ -403,7 +403,8 @@ class ApiMixin:
                         "style": current.get("style") or "简约风",
                         "colors": current.get("colors") or "米白色",
                         "furniture": list(current.get("furniture") or []),
-                    "furniture_detail": housing.furniture_detail(current),
+                    "furniture_detail": (housing.furniture_detail(current)
+                                         if hasattr(housing, "furniture_detail") else []),
                         "rent_cents": int(current.get("rent_cents") or 0),
                         "images": current_images,
                     }, "homes": homes}
