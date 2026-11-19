@@ -55,6 +55,18 @@ class MealZoneTests(unittest.TestCase):
         self.assertIn("自己做饭", names)
         self.assertNotIn("食堂套餐", names)
 
+    def test_named_dish_wins(self):
+        f = Fake()
+        f.where = "商场 和他吃酸菜鱼"
+        self.assertEqual(f._menu_for_place("dinner", CHEAP_MENUS["dinner"]),
+                         (("酸菜鱼", 1),))
+
+    def test_friend_named_dish_wins(self):
+        f = Fake()
+        f.where = "餐厅 朋友约我吃火锅"
+        self.assertEqual(f._menu_for_place("lunch", CHEAP_MENUS["lunch"]),
+                         (("火锅", 1),))
+
     def test_unknown_place_keeps_menu(self):
         f = Fake()
         f.where = ""

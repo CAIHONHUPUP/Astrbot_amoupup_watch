@@ -41,6 +41,10 @@ CHEAP_MENUS = {
 }
 
 
+#: 他/朋友点名的具体吃的（2026-11-19）：日程或活动里写了就直接按这个记
+DISH_WORDS = ("酸菜鱼", "火锅", "寿司", "烤肉", "烧烤", "日料", "西餐",
+              "小龙虾", "麻辣烫", "披萨")
+
 #: 吃饭地点关键词（2026-11-19）
 HOME_WORDS = ("家", "宿舍", "出租屋", "住处", "公寓")
 CANTEEN_WORDS = ("食堂", "饭堂")
@@ -118,7 +122,11 @@ class FinanceDaily:
         """
         if slot not in ("lunch", "dinner"):
             return menu
-        zone = self._meal_zone(self._where_text())
+        where = self._where_text()
+        for dish in DISH_WORDS:
+            if dish in where:
+                return ((dish, 1),)
+        zone = self._meal_zone(where)
         if not zone:
             return menu
         if zone == "canteen":
