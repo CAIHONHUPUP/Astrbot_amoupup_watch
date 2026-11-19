@@ -176,7 +176,29 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         except Exception as exc:
             isolated("npc.mirror", exc)
 
+    def _check_relative_imports(self):
+        """启动自检：相对导入解析不开就直接 ERROR，别等模型调用工具才炸。"""
+        import os
+        try:  # 包模式
+            from .utils.import_guard import check
+        except ImportError:  # 直接按文件加载
+            from utils.import_guard import check
+        root = os.path.dirname(os.path.abspath(__file__))
+        try:
+            checked, problems = check(root, __package__ or "")
+        except Exception as exc:  # 自检本身绝不拖垮启动
+            isolated("boot.import_guard", exc)
+            return
+        for problem in problems:
+            logger.error("[WATCH] 导入自检失败 %s", problem)
+        if problems:
+            logger.error("[WATCH] 导入自检：%d/%d 条相对导入解析失败，相关工具一调用就会 ModuleNotFoundError",
+                         len(problems), checked)
+        else:
+            logger.info("[WATCH] 导入自检通过：%d 条相对导入", checked)
+
     async def initialize(self):
+        self._check_relative_imports()
         self._started_at = time.time()
         cfg = self.config
         self.runtime = Runtime(

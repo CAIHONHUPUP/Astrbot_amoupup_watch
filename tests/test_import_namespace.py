@@ -98,6 +98,12 @@ class ProductionNamespaceTests(unittest.TestCase):
             spec = importlib.util.find_spec(ALIAS + "." + target)
             self.assertIsNotNone(spec, "包路径解析失败：%s" % target)
 
+    def test_runtime_import_guard_reports_clean_tree(self):
+        guard = importlib.import_module(ALIAS + ".utils.import_guard")
+        checked, problems = guard.check(ROOT, ALIAS)
+        self.assertGreaterEqual(checked, 50, "自检没扫到导入，检查 SUBPACKAGES")
+        self.assertEqual(problems, [], "\n".join(problems))
+
 
 if __name__ == "__main__":
     unittest.main()

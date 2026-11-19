@@ -1097,6 +1097,21 @@
   function houseToast(text) {
     try { toast(text); } catch (e) { alert(text); }
   }
+  function houseFurnitureHtml(home) {
+    var detail = (home && home.furniture_detail) || [];
+    var total = 0;
+    detail.forEach(function (room) { total += (room.items || []).length; });
+    var body = detail.map(function (room) {
+      var items = room.items || [];
+      var list = items.length ? items.map(function (it) {
+        var extra = it.source ? "（" + esc(it.source) + "）" : "";
+        return "<div class=\"house-line\">· " + esc(it.display || it.name) + extra + "</div>";
+      }).join("") : "<div class=\"house-line\">· 空</div>";
+      var tag = room.pending ? " · 参考图更新中" : "";
+      return "<div class=\"house-line\"><strong>" + esc(room.label) + "（" + items.length + "）</strong>" + tag + "</div>" + list;
+    }).join("");
+    return "<details class=\"house-furniture\"><summary>当前家具（" + total + " 件）</summary>" + body + "</details>";
+  }
   function renderHousing(d) {
     var cur = d.current || {};
     var homes = d.homes || [];
@@ -1108,7 +1123,8 @@
       currentBox.innerHTML = "<strong>" + esc(cur.name || "家") + "</strong>" +
         "<div class=\"house-line\">" + (own ? "自己买的房子，不用再交房租" : "租住中 · 月租 " + houseMoney(cur.rent_cents)) +
         " · " + esc(cur.style || "简约风") + " · " + esc(cur.colors || "米白色") + "</div>" +
-        "<div class=\"house-line\">家具：" + esc((cur.furniture || []).join("、") || "（空）") + "</div>";
+        "<div class=\"house-line\">家具：" + esc((cur.furniture || []).join("、") || "（空）") + "</div>" +
+        houseFurnitureHtml(cur);
     }
     var gallery = q("houseGallery");
     if (gallery) {
