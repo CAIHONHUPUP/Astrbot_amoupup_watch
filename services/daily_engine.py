@@ -83,6 +83,28 @@ class FinanceDaily:
         except Exception:
             return False
 
+    def _place_text(self):
+        """她此刻在哪（读 amo 日程）；拿不到就返回空串。"""
+        amo = self._amo()
+        if amo is None:
+            return ""
+        try:
+            act = amo.state.current_activity() or {}
+        except Exception as exc:
+            isolated("daily.place", exc)
+            return ""
+        return str(act.get("place") or "")
+
+    def _menu_for_place(self, slot, menu):
+        """不在家就别「自己做饭」：换成同价位的现成饭（2026-11-19 食堂记账成自己做饭）。"""
+        if slot not in ("lunch", "dinner"):
+            return menu
+        place = self._place_text()
+        if not place or any(word in place for word in ("家", "宿舍", "出租屋", "住处", "公寓")):
+            return menu
+        filtered = tuple(opt for opt in menu if "自己做饭" not in opt)
+        return filtered or menu
+
     def _in_window(self, slot, now):
         start, end = WINDOWS[slot]
         minutes = now.hour * 60 + now.minute
@@ -215,6 +237,7 @@ class FinanceDaily:
                 self.repo.meta_set(flag, "1")
                 continue
             menu = (CHEAP_MENUS if thrifty else MENUS)[slot]
+            menu = self._menu_for_place(slot, menu)
             items = _pick(day, slot, menu)
             pairs = [{"item": items[i], "qty": items[i + 1]} for i in range(0, len(items), 2)]
             results = await self.consume.buy_items(pairs, idem=idem_key("meal", day, slot), when=slot)
