@@ -29,7 +29,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import buy_insurance_tool
+                from .llm_tools import buy_insurance_tool
 
             except ImportError:
 
@@ -47,7 +47,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import buy_gift_tool
+                from .llm_tools import buy_gift_tool
 
             except ImportError:
 
@@ -65,7 +65,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import deposit_money_tool
+                from .llm_tools import deposit_money_tool
 
             except ImportError:
 
@@ -82,7 +82,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .services.date_engine import make_date
+                from ..services.date_engine import make_date
 
             except ImportError:
 
@@ -101,7 +101,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .services.date_engine import cancel_date
+                from ..services.date_engine import cancel_date
 
             except ImportError:
 
@@ -120,7 +120,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .services.date_engine import attend_date
+                from ..services.date_engine import attend_date
 
             except ImportError:
 
@@ -139,7 +139,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import confirm_arrival_tool
+                from .llm_tools import confirm_arrival_tool
 
             except ImportError:
 
@@ -155,7 +155,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import rent_out_property_tool
+                from .llm_tools import rent_out_property_tool
 
             except ImportError:
 
@@ -171,7 +171,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import sell_property_tool
+                from .llm_tools import sell_property_tool
 
             except ImportError:
 
@@ -187,7 +187,7 @@ class ToolWrappersMixin:
 
             try:
 
-                from .core.llm_tools import propose_date_tool
+                from .llm_tools import propose_date_tool
 
             except ImportError:
 
@@ -206,7 +206,7 @@ class ToolWrappersMixin:
             金额绝不允许超过可用余额；借钱时钱不够可以少借（自己传 amount）。
             """
             try:
-                from .core.llm_tools import accept_social_event_tool
+                from .llm_tools import accept_social_event_tool
             except ImportError:
                 from core.llm_tools import accept_social_event_tool
             return await accept_social_event_tool(self, npc, place, amount, note, start, end,
@@ -217,7 +217,7 @@ class ToolWrappersMixin:
         async def reject_social_event(self, event=None, reason: str = "", note: str = ""):
             """婉拒邀约：说清真实理由（太累/没钱/不想去），不扣钱也不占日程。"""
             try:
-                from .core.llm_tools import reject_social_event_tool
+                from .llm_tools import reject_social_event_tool
             except ImportError:
                 from core.llm_tools import reject_social_event_tool
             return await reject_social_event_tool(self, reason, note)
@@ -227,7 +227,7 @@ class ToolWrappersMixin:
         async def buy_stock(self, event=None, code: str = "", qty: int = 100, price: float = 0.0):
             """她决定买入股票时调用：真实行情/余额/手续费校验。"""
             try:
-                from .core.llm_tools import buy_stock_tool
+                from .llm_tools import buy_stock_tool
             except ImportError:
                 from core.llm_tools import buy_stock_tool
             return await buy_stock_tool(self, event, code, qty, price)
@@ -236,7 +236,7 @@ class ToolWrappersMixin:
         async def sell_stock(self, event=None, code: str = "", qty: int = 100, price: float = 0.0):
             """她决定卖出股票时调用：更新持仓、入账并写流水。"""
             try:
-                from .core.llm_tools import sell_stock_tool
+                from .llm_tools import sell_stock_tool
             except ImportError:
                 from core.llm_tools import sell_stock_tool
             return await sell_stock_tool(self, event, code, qty, price)
@@ -245,7 +245,7 @@ class ToolWrappersMixin:
         async def buy_fund(self, event=None, code: str = "", amount: float = 0.0, nav: float = 0.0):
             """她决定申购基金时调用：amount 是元；扣款、持仓、流水。"""
             try:
-                from .core.llm_tools import buy_fund_tool
+                from .llm_tools import buy_fund_tool
             except ImportError:
                 from core.llm_tools import buy_fund_tool
             return await buy_fund_tool(self, event, code, amount, nav)
@@ -254,7 +254,7 @@ class ToolWrappersMixin:
         async def sell_fund(self, event=None, code: str = "", shares: float = 0.0, nav: float = 0.0):
             """她决定赎回基金时调用：份额、手续费、T+7 到账。"""
             try:
-                from .core.llm_tools import sell_fund_tool
+                from .llm_tools import sell_fund_tool
             except ImportError:
                 from core.llm_tools import sell_fund_tool
             return await sell_fund_tool(self, event, code, shares, nav)
@@ -263,7 +263,7 @@ class ToolWrappersMixin:
         async def send_message_to_user(self, event=None, text: str = ""):
             """主动给老公发一条消息：text 是你此刻想说的话，不是系统提示。"""
             try:
-                from .core.fund_actions import send_message_to_user_action
+                from .fund_actions import send_message_to_user_action
             except ImportError:
                 from core.fund_actions import send_message_to_user_action
             out = await send_message_to_user_action(self, text)
@@ -273,7 +273,7 @@ class ToolWrappersMixin:
         async def skip_fund_trade(self, event=None, reason: str = ""):
             """主动放弃今天的基金交易：reason 是你自己的理由。"""
             try:
-                from .core.fund_actions import skip_fund_trade_action
+                from .fund_actions import skip_fund_trade_action
             except ImportError:
                 from core.fund_actions import skip_fund_trade_action
             await skip_fund_trade_action(self, reason)
@@ -284,7 +284,7 @@ class ToolWrappersMixin:
                                    term_months: int = 0, note: str = ""):
             """把钱挪作他用：target=deposit_fixed/deposit_current/shopping/keep；amount 是元。"""
             try:
-                from .core.fund_actions import reallocate_funds_action
+                from .fund_actions import reallocate_funds_action
             except ImportError:
                 from core.fund_actions import reallocate_funds_action
             out = await reallocate_funds_action(
@@ -298,7 +298,7 @@ class ToolWrappersMixin:
 async def modify_date_tool(self, event=None, activity: str = "", time: str = ""):
     """老公改时间：新的时间顶掉旧的 pending，日程里只留一条。"""
     try:
-        from .core.llm_tools import propose_date_tool
+        from .llm_tools import propose_date_tool
     except ImportError:
         from core.llm_tools import propose_date_tool
     return await propose_date_tool(self, activity, time)

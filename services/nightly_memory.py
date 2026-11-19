@@ -61,7 +61,7 @@ async def _maybe_await(value):
 
 async def _provider(plugin):
     try:
-        from .core.llm_decider import _provider as provider_of
+        from ..core.llm_decider import _provider as provider_of
     except ImportError:
         from core.llm_decider import _provider as provider_of
     return await provider_of(plugin)

@@ -188,7 +188,7 @@ async def propose_date_tool(plugin, activity="", time=""):
     mapping = {"中午": "12:00", "晚上": "18:30", "早上": "08:00", "下午": "15:00"}
     when = mapping.get(raw, raw)
     try:
-        from .services.date_engine import make_date
+        from ..services.date_engine import make_date
     except ImportError:
         from services.date_engine import make_date
     out = await make_date(plugin, activity, when)
@@ -202,7 +202,7 @@ async def propose_date_tool(plugin, activity="", time=""):
 async def confirm_arrival_tool(plugin, activity_name=""):
     """等待赴约时确认老公到达：立刻进入 dating，并说见面的话。"""
     try:
-        from .services.date_engine import active_date, attend_date, find_pending
+        from ..services.date_engine import active_date, attend_date, find_pending
     except ImportError:
         from services.date_engine import active_date, attend_date, find_pending
     if active_date(plugin):
