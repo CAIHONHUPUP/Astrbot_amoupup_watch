@@ -747,7 +747,8 @@ class SocialEngine:
         if not row:
             return None
         try:
-            return int(row.get("affinity"))
+            value = row.get("affinity")
+            return None if value is None else int(value)
         except (TypeError, ValueError):
             return None
 
