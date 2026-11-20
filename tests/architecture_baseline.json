@@ -1,0 +1,261 @@
+{
+  "api/__init__.py": [],
+  "api/decisions_ext.py": [
+    "guard"
+  ],
+  "api/handlers.py": [
+    "api",
+    "core",
+    "guard",
+    "services",
+    "utils"
+  ],
+  "api/routes.py": [],
+  "core/__init__.py": [],
+  "core/agent_loop.py": [
+    "core",
+    "guard",
+    "services",
+    "utils"
+  ],
+  "core/amo_bridge.py": [
+    "core",
+    "guard",
+    "services",
+    "utils"
+  ],
+  "core/amo_contract.py": [],
+  "core/compat.py": [],
+  "core/errors.py": [],
+  "core/fund_actions.py": [
+    "guard",
+    "services"
+  ],
+  "core/fund_pool.py": [],
+  "core/jobs.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "core/llm_decider.py": [
+    "guard"
+  ],
+  "core/llm_tools.py": [
+    "services",
+    "utils"
+  ],
+  "core/memory_link.py": [
+    "guard"
+  ],
+  "core/memory_tier.py": [
+    "guard"
+  ],
+  "core/observability.py": [],
+  "core/runtime.py": [
+    "guard"
+  ],
+  "core/scheduler.py": [],
+  "core/tool_wrappers.py": [
+    "core",
+    "services"
+  ],
+  "guard.py": [],
+  "main.py": [
+    "api",
+    "core",
+    "guard",
+    "models",
+    "services",
+    "ui",
+    "utils"
+  ],
+  "models/__init__.py": [],
+  "models/db.py": [],
+  "models/ledger.py": [],
+  "models/memory.py": [],
+  "services/__init__.py": [],
+  "services/assets.py": [],
+  "services/bank_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/bankruptcy_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/bill_engine.py": [],
+  "services/bill_flow.py": [
+    "guard",
+    "utils"
+  ],
+  "services/candidates.py": [
+    "guard"
+  ],
+  "services/city.py": [
+    "guard",
+    "utils"
+  ],
+  "services/consume_engine.py": [],
+  "services/credit_engine.py": [],
+  "services/daily_engine.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/dashboard.py": [
+    "guard",
+    "utils"
+  ],
+  "services/date_engine.py": [
+    "core",
+    "guard"
+  ],
+  "services/date_rules.py": [],
+  "services/diary_engine.py": [],
+  "services/event_engine.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/expense_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/finance_cmd.py": [
+    "guard"
+  ],
+  "services/fortune_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/fund_api.py": [
+    "guard"
+  ],
+  "services/fund_market.py": [
+    "core",
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/gamble_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/gift_engine.py": [],
+  "services/health_bridge.py": [],
+  "services/insurance_engine.py": [
+    "utils"
+  ],
+  "services/late_night_engine.py": [
+    "core",
+    "services",
+    "utils"
+  ],
+  "services/ledger_audit.py": [
+    "guard",
+    "utils"
+  ],
+  "services/lending_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/life_engine.py": [
+    "core",
+    "services",
+    "utils"
+  ],
+  "services/market_api.py": [
+    "guard"
+  ],
+  "services/medical_engine.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/menu.py": [
+    "guard"
+  ],
+  "services/news_api.py": [
+    "guard"
+  ],
+  "services/nightly_memory.py": [
+    "core"
+  ],
+  "services/npc_roster.py": [
+    "guard"
+  ],
+  "services/npc_status.py": [
+    "utils"
+  ],
+  "services/property_engine.py": [
+    "guard",
+    "utils"
+  ],
+  "services/shopping_engine.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/social_ai.py": [
+    "core",
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/social_cmd.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/social_engine.py": [
+    "core",
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/social_rules.py": [
+    "utils"
+  ],
+  "services/trade_engine.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/transfer_service.py": [
+    "guard",
+    "services"
+  ],
+  "services/work_engine.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "services/work_events.py": [
+    "guard",
+    "services",
+    "utils"
+  ],
+  "tools/check_version.py": [],
+  "tools/cleanup_temp.py": [],
+  "tools/mypy_check.py": [],
+  "tools/mypy_strict.py": [],
+  "tools/quality_gate.py": [],
+  "tools/release_check.py": [],
+  "tools/rollback.py": [],
+  "ui/__init__.py": [],
+  "ui/cards.py": [
+    "guard",
+    "services",
+    "ui"
+  ],
+  "ui/report.py": [],
+  "utils/__init__.py": [],
+  "utils/clock.py": [],
+  "utils/facts.py": [],
+  "utils/helpers.py": [],
+  "utils/humanize.py": [],
+  "utils/import_guard.py": [],
+  "utils/money.py": [],
+  "utils/mood.py": [],
+  "utils/ui_sanitize.py": []
+}
