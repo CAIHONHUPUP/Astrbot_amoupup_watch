@@ -696,7 +696,24 @@ def _date_loot(bridge, title):
 
 
 def active_date(plugin):
-    """当前约会状态：{"status": "dating", ...}；没有则 None。"""
+    """当前约会状态：{"status": "dating", ...}；没有则 None。
+
+    2026-11-20：以陪伴的 date_session 为唯一真相，本地 date:active 只当缓存。
+    以前只读本地 meta，陪伴 session 已 active 时这里还是空的，两边各判一套。
+    """
+    bridge = _bridge(plugin)
+    if bridge.ready:
+        try:
+            data = bridge.call("date_session").value or {}
+            if isinstance(data, dict):
+                phase = str(data.get("phase") or "")
+                if phase in ("active", "paused"):
+                    return {"title": str(data.get("title") or "约会"),
+                            "start": float(data.get("start_ts") or 0),
+                            "end": float(data.get("end_ts") or 0),
+                            "status": "dating"}
+        except Exception as exc:
+            isolated("date_engine.active_date.session", exc)
     active = _active(plugin)
     return active if active and active.get("status") == "dating" else None
 
