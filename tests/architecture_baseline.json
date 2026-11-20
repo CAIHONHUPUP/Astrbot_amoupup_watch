@@ -5,44 +5,81 @@
   ],
   "api/handlers.py": [
     "api",
+    "api.decisions_ext",
     "core",
+    "core.amo_bridge",
     "guard",
     "services",
-    "utils"
+    "services.bank_engine",
+    "services.city",
+    "services.fund_market",
+    "services.gift_engine",
+    "services.insurance_engine",
+    "services.social_engine",
+    "utils",
+    "utils.clock",
+    "utils.ui_sanitize"
   ],
   "api/routes.py": [],
   "core/__init__.py": [],
   "core/agent_loop.py": [
     "core",
+    "core.fund_actions",
+    "core.llm_decider",
     "guard",
     "services",
-    "utils"
+    "services.bank_engine",
+    "services.fund_market",
+    "services.market_api",
+    "services.news_api",
+    "utils",
+    "utils.clock",
+    "utils.helpers"
   ],
   "core/amo_bridge.py": [
     "core",
+    "core.amo_contract",
+    "core.memory_link",
     "guard",
-    "services",
-    "utils"
+    "services.bill_engine",
+    "services.diary_engine",
+    "utils",
+    "utils.mood"
   ],
   "core/amo_contract.py": [],
   "core/compat.py": [],
   "core/errors.py": [],
   "core/fund_actions.py": [
     "guard",
-    "services"
+    "services",
+    "services.bank_engine"
   ],
   "core/fund_pool.py": [],
   "core/jobs.py": [
     "guard",
     "services",
-    "utils"
+    "services.bank_engine",
+    "services.bankruptcy_engine",
+    "services.date_engine",
+    "services.fund_market",
+    "services.gift_engine",
+    "services.late_night_engine",
+    "services.nightly_memory",
+    "services.shopping_engine",
+    "services.social_engine",
+    "utils",
+    "utils.clock"
   ],
   "core/llm_decider.py": [
     "guard"
   ],
   "core/llm_tools.py": [
     "services",
-    "utils"
+    "services.bank_engine",
+    "services.date_engine",
+    "services.insurance_engine",
+    "utils",
+    "utils.helpers"
   ],
   "core/memory_link.py": [
     "guard"
@@ -57,112 +94,185 @@
   "core/scheduler.py": [],
   "core/tool_wrappers.py": [
     "core",
-    "services"
+    "core.fund_actions",
+    "core.llm_tools",
+    "services",
+    "services.date_engine"
   ],
   "guard.py": [],
   "main.py": [
     "api",
+    "api.handlers",
     "core",
+    "core.compat",
+    "core.fund_pool",
+    "core.runtime",
+    "core.scheduler",
+    "core.tool_wrappers",
     "guard",
     "models",
+    "models.db",
     "services",
+    "services.bank_engine",
+    "services.bill_engine",
+    "services.city",
+    "services.date_engine",
+    "services.date_rules",
+    "services.finance_cmd",
+    "services.gift_engine",
+    "services.late_night_engine",
+    "services.medical_engine",
+    "services.menu",
+    "services.shopping_engine",
+    "services.social_cmd",
+    "services.transfer_service",
     "ui",
-    "utils"
+    "ui.cards",
+    "utils",
+    "utils.clock",
+    "utils.import_guard",
+    "utils.ui_sanitize"
   ],
-  "models/__init__.py": [],
+  "models/__init__.py": [
+    "models.db",
+    "models.ledger",
+    "models.memory"
+  ],
   "models/db.py": [],
-  "models/ledger.py": [],
+  "models/ledger.py": [
+    "models.memory"
+  ],
   "models/memory.py": [],
-  "services/__init__.py": [],
+  "services/__init__.py": [
+    "services.market_api"
+  ],
   "services/assets.py": [],
   "services/bank_engine.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/bankruptcy_engine.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/bill_engine.py": [],
   "services/bill_flow.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers",
+    "utils.money"
   ],
   "services/candidates.py": [
     "guard"
   ],
   "services/city.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
-  "services/consume_engine.py": [],
+  "services/consume_engine.py": [
+    "services.city",
+    "services.expense_engine"
+  ],
   "services/credit_engine.py": [],
   "services/daily_engine.py": [
     "guard",
     "services",
-    "utils"
+    "services.date_rules",
+    "services.health_bridge",
+    "utils",
+    "utils.helpers",
+    "utils.money"
   ],
   "services/dashboard.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/date_engine.py": [
     "core",
-    "guard"
+    "core.amo_bridge",
+    "guard",
+    "services.date_rules"
   ],
   "services/date_rules.py": [],
   "services/diary_engine.py": [],
   "services/event_engine.py": [
     "guard",
     "services",
-    "utils"
+    "services.npc_roster",
+    "services.social_ai",
+    "utils",
+    "utils.helpers"
   ],
   "services/expense_engine.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.money"
   ],
   "services/finance_cmd.py": [
     "guard"
   ],
   "services/fortune_engine.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/fund_api.py": [
     "guard"
   ],
   "services/fund_market.py": [
     "core",
+    "core.fund_pool",
     "guard",
     "services",
-    "utils"
+    "services.fund_api",
+    "utils",
+    "utils.helpers"
   ],
   "services/gamble_engine.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/gift_engine.py": [],
   "services/health_bridge.py": [],
   "services/insurance_engine.py": [
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/late_night_engine.py": [
     "core",
+    "core.amo_bridge",
     "services",
-    "utils"
+    "services.health_bridge",
+    "utils",
+    "utils.helpers"
   ],
   "services/ledger_audit.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.money"
   ],
   "services/lending_engine.py": [
     "guard",
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/life_engine.py": [
     "core",
+    "core.amo_bridge",
     "services",
-    "utils"
+    "services.bank_engine",
+    "services.bill_flow",
+    "services.city",
+    "services.daily_engine",
+    "services.health_bridge",
+    "utils",
+    "utils.helpers",
+    "utils.money"
   ],
   "services/market_api.py": [
     "guard"
@@ -170,7 +280,10 @@
   "services/medical_engine.py": [
     "guard",
     "services",
-    "utils"
+    "services.health_bridge",
+    "services.insurance_engine",
+    "utils",
+    "utils.helpers"
   ],
   "services/menu.py": [
     "guard"
@@ -179,66 +292,104 @@
     "guard"
   ],
   "services/nightly_memory.py": [
-    "core"
+    "core",
+    "core.llm_decider"
   ],
   "services/npc_roster.py": [
-    "guard"
+    "guard",
+    "services.npc_status"
   ],
   "services/npc_status.py": [
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/property_engine.py": [
     "guard",
-    "utils"
+    "services.city",
+    "utils",
+    "utils.helpers"
   ],
   "services/shopping_engine.py": [
     "guard",
     "services",
-    "utils"
+    "services.city",
+    "utils",
+    "utils.helpers",
+    "utils.money"
   ],
   "services/social_ai.py": [
     "core",
+    "core.llm_decider",
     "guard",
     "services",
-    "utils"
+    "services.npc_roster",
+    "utils",
+    "utils.humanize"
   ],
   "services/social_cmd.py": [
     "guard",
     "services",
-    "utils"
+    "services.dashboard",
+    "services.event_engine",
+    "services.insurance_engine",
+    "services.npc_roster",
+    "services.social_engine",
+    "utils",
+    "utils.helpers"
   ],
   "services/social_engine.py": [
     "core",
+    "core.amo_bridge",
     "guard",
     "services",
-    "utils"
+    "services.date_engine",
+    "services.date_rules",
+    "services.health_bridge",
+    "services.npc_roster",
+    "services.social_ai",
+    "services.social_rules",
+    "utils",
+    "utils.helpers",
+    "utils.humanize"
   ],
   "services/social_rules.py": [
-    "utils"
+    "utils",
+    "utils.helpers"
   ],
   "services/trade_engine.py": [
     "guard",
     "services",
-    "utils"
+    "services.fund_api",
+    "services.market_api",
+    "utils",
+    "utils.clock",
+    "utils.helpers"
   ],
   "services/transfer_service.py": [
     "guard",
-    "services"
+    "services",
+    "services.city"
   ],
   "services/work_engine.py": [
     "guard",
     "services",
-    "utils"
+    "services.bill_flow",
+    "utils",
+    "utils.helpers",
+    "utils.money"
   ],
   "services/work_events.py": [
     "guard",
     "services",
-    "utils"
+    "services.health_bridge",
+    "utils",
+    "utils.helpers"
   ],
   "tools/check_version.py": [],
   "tools/cleanup_temp.py": [],
   "tools/mypy_check.py": [],
   "tools/mypy_strict.py": [],
+  "tools/pack_release.py": [],
   "tools/quality_gate.py": [],
   "tools/release_check.py": [],
   "tools/rollback.py": [],
@@ -246,16 +397,29 @@
   "ui/cards.py": [
     "guard",
     "services",
-    "ui"
+    "services.bank_engine",
+    "services.city",
+    "ui",
+    "ui.report"
   ],
   "ui/report.py": [],
-  "utils/__init__.py": [],
+  "utils/__init__.py": [
+    "utils.helpers"
+  ],
   "utils/clock.py": [],
-  "utils/facts.py": [],
-  "utils/helpers.py": [],
-  "utils/humanize.py": [],
+  "utils/facts.py": [
+    "utils.money"
+  ],
+  "utils/helpers.py": [
+    "utils.money"
+  ],
+  "utils/humanize.py": [
+    "utils.money"
+  ],
   "utils/import_guard.py": [],
   "utils/money.py": [],
-  "utils/mood.py": [],
+  "utils/mood.py": [
+    "utils.money"
+  ],
   "utils/ui_sanitize.py": []
 }

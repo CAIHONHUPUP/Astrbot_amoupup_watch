@@ -45,6 +45,23 @@ def _module_names():
     return names
 
 
+def _package_of(rel):
+    """文件所在包（点分）；根目录文件返回空串。"""
+    folder = os.path.dirname(rel).replace(os.sep, "/")
+    return folder.replace("/", ".") if folder else ""
+
+
+def _resolve_relative(package, level, module):
+    """from .x / from ..x → 完整的点分模块名。"""
+    parts = package.split(".") if package else []
+    if level > 1:
+        parts = parts[: max(0, len(parts) - (level - 1))]
+    base = ".".join(parts)
+    if base and module:
+        return base + "." + module
+    return module or base
+
+
 def _collect(names):
     fanout = {}
     for path in _production_files():
@@ -55,11 +72,12 @@ def _collect(names):
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 if (node.level or 0) > 0:
+                    package = _package_of(rel)
                     if node.module:
-                        targets.add(node.module.split(".")[0])
+                        targets.add(_resolve_relative(package, node.level, node.module))
                     else:
                         for alias in node.names:
-                            targets.add(alias.name.split(".")[0])
+                            targets.add(_resolve_relative(package, node.level, alias.name))
                 else:
                     mod = (node.module or "").split(".")[0]
                     if mod in names:
@@ -132,6 +150,16 @@ class ArchitectureRatchetTests(unittest.TestCase):
         probe = {"services/daily_engine.py": ["main", "api"]}
         found = boundary_violations(probe)
         self.assertEqual(2, len(found))
+
+    def test_relative_import_is_tracked(self):
+        """相对 import 必须解析成完整模块名，否则棘轮只锁到包级、形同空转。"""
+        self.assertIn("services.date_rules", self.fanout.get("services/date_engine.py", []))
+
+    def test_baseline_is_not_empty(self):
+        baseline = load_baseline()
+        self.assertGreater(len(baseline), 50)
+        edges = sum(len(v) for v in baseline.values())
+        self.assertGreater(edges, 50)
 
 
 def _generate_baseline():
