@@ -1054,9 +1054,17 @@ class SocialEngine:
             items = list((getattr(state, "schedule", {}) or {}).get(day) or [])
             kept = [row for row in items
                     if not (str(row.get("start")) == start and name in str(row.get("activity") or ""))]
-            if len(kept) != len(items):
-                bridge.call("commit_schedule_change", day, kept, old_items=items,
-                            source="social", reason="社交回滚日程")
+            if len(kept) == len(items):
+                return
+            # 回滚必须无视 locked：这条刚写进去的块带着 locked=True，
+            # 走 commit_schedule_change 会被 protect_locked 顶回来（2026-11-20）。
+            schedule = dict(bridge.call("kv_get", "schedule", {}).value or {})
+            schedule[day] = kept
+            bridge.call("kv_set", "schedule", schedule)
+            try:
+                state.schedule[day] = kept
+            except Exception as exc:
+                isolated("social.drop_schedule.memory", exc)
         except Exception as exc:
             isolated("social.drop_schedule", exc)
 
