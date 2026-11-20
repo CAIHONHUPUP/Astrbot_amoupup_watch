@@ -72,14 +72,16 @@ def test_sell_cash_now_withdrawable_t_plus_1(env, monkeypatch):
     monkeypatch.setattr(ft, "in_session", lambda now: True)
     asyncio.run(trading.buy("601398", 100, price=5.0, idem="b1"))
     # T+1 到期：把「今天」拨到 ready_day 当天再放行，别再依赖 tick 立即放行。
-    monkeypatch.setattr(trading, "_day",
-                        lambda: repo.position("stock", "601398")["ready_day"])
+    # ready_day 要在卖出前取：卖出会删持仓，事后再取就是 None（跨零点才暴露的老坑）。
+    sell_day = str(repo.position("stock", "601398")["ready_day"])
+    monkeypatch.setattr(trading, "_day", lambda: sell_day)
     trading.refresh_available()
     cash_before = finance.amo.wallet.balance("cash")
     asyncio.run(trading.sell("601398", 100, price=6.0, idem="s1"))
     assert finance.amo.wallet.balance("cash") > cash_before
     rows = repo._rows("SELECT * FROM pending_credits WHERE kind='withdrawable'")
-    assert rows and rows[0]["due_day"] >= dt.date.today().isoformat()
+    from utils.helpers import next_trading_day
+    assert rows and rows[0]["due_day"] == next_trading_day(sell_day)
 
 
 def test_redeem_schedules_cash_arrival(env):

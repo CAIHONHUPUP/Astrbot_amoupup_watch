@@ -342,6 +342,9 @@ def truncate_finished_blocks(rows, now):
             changed = True
             continue
         if (is_date_block(row) or social) and begin <= now_minute < finish:
+            # 2026-11-21：截断留痕，碎片判定与后续合并都靠它
+            row["origin_end"] = row.get("end")
+            row["truncated_by"] = "date_finish"
             row["end"] = hhmm
             changed = True
         kept.append(row)
