@@ -642,7 +642,11 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
     if random.random() < 0.3:
         incident = random.choice(DATE_INCIDENTS)
         bridge.call("set_date_incident", incident, end.timestamp())
-        await bridge.call_async("push_to_owner", incident)
+        gate = getattr(bridge.resolve(), "request_push", None)
+        if callable(gate):
+            await gate(incident, "date_incident")
+        else:
+            await bridge.call_async("push_to_owner", incident)
     day = now.date().isoformat()
     item = {"start": now.strftime("%H:%M"), "end": end.strftime("%H:%M"),
             "activity": "和老公" + title, "category": "social", "place": "外面",

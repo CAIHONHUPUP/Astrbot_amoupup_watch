@@ -141,8 +141,13 @@ async def finance_tick(plugin):
                 if not text:
                     continue
                 amo = plugin.finance._amo() if hasattr(plugin.finance, "_amo") else None
-                if amo is not None and hasattr(amo, "push_to_owner"):
-                    await amo.push_to_owner(text)
+                if amo is not None:
+                    # 走陪伴的统一闸口（静默时段 + 10 分钟最小间隔）；老版本回退直发
+                    gate = getattr(amo, "request_push", None)
+                    if callable(gate):
+                        await gate(text, "social")
+                    elif hasattr(amo, "push_to_owner"):
+                        await amo.push_to_owner(text)
         except Exception as exc:
             isolated("finance.social_tick", exc)
         await plugin._guard_step("pending", plugin._process_pending())

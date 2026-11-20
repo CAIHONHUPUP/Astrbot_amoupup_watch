@@ -691,6 +691,14 @@ class FinanceLink:
                     old = str(getter(day, hour) or "").strip()
                 except Exception as exc:
                     logger.debug("[WATCH] optional step failed: %r", exc)
+            # 2026-11-20：这一小时已经有陪伴的块日记 → 不覆盖（块日记会带账本事实自己写）。
+            try:
+                recorder = getattr(getattr(amo, "db", None), "get_diary_record", None)
+                record = recorder(day, hour) if callable(recorder) else None
+                if isinstance(record, dict) and str(record.get("source") or "") == "block":
+                    return True
+            except Exception as exc:
+                logger.debug("[WATCH] optional step failed: %r", exc)
             if old and old != text:
                 # 同一小时多条流水：合成一句，别让最后一条把前面的人话顶掉
                 if text in old:
@@ -699,7 +707,7 @@ class FinanceLink:
                     merged = old.rstrip("。；; ") + "；" + text
                 else:
                     merged = old
-            amo.db.save_diary(day, hour, merged)
+            amo.db.save_diary(day, hour, merged, source="finance")
             return True
         except Exception as exc:
             isolated("finance.small_diary", exc)
@@ -948,7 +956,9 @@ class FinanceLink:
                         and str(row.get("end") or "") == item["end"]
                         and str(row.get("activity") or "") == item["activity"]):
                     return True
-            result = amo.state.add_schedule_item(str(day), item, source="watch",
+            # 社交/餐饮/约会块进锁来源：陪伴的整点重算不许覆盖（2026-11-20）
+            source = "social" if str(category) in ("social", "date", "meal", "ceremony") else "watch"
+            result = amo.state.add_schedule_item(str(day), item, source=source,
                                                  reason=str(activity))
             return bool(isinstance(result, dict) and result.get("changed", True))
         except Exception as exc:
