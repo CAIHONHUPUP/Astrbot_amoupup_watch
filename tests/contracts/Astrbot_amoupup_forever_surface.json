@@ -152,6 +152,7 @@
   "save_diary": [
     "day",
     "hour",
+    "source",
     "start",
     "status",
     "text",

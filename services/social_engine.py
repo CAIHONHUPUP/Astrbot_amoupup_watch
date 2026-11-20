@@ -1289,6 +1289,7 @@ class SocialEngine:
             use_start, use_end = parsed_start, parsed_end
         if not day_text:
             day_text = _dt.date.today().isoformat()
+        requested_day = day_text
         # 幂等：这场约会已经写进日程了，就不再挪日子、不再写第二条
         existing = False
         if use_start:
@@ -1399,6 +1400,13 @@ class SocialEngine:
             note_text = objective_last("social:accept", name, label, day_text, use_start)
         if not note_text:
             note_text = said
+        if requested_day and day_text != requested_day:
+            # 改期必须说出来，别让用户以为还是原定那天（2026-11-20）
+            try:
+                shifted_label = day_label(_dt.date.fromisoformat(day_text))
+            except (TypeError, ValueError):
+                shifted_label = day_text
+            note_text = "改到%s；%s" % (shifted_label, note_text or "")
         about = npc_roster.sanitize(about_user, name)
         if about and not any(word in about for word in ("老公", "他", "你", "亲爱的", "对象")):
             about = ""

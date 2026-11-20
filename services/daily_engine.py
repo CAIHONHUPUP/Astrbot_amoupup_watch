@@ -389,7 +389,9 @@ class FinanceDaily:
                     self.repo.meta_set(flag, "1")
         # 日用品：隔几天补一次（纸巾 / 牙膏 / 洗衣液）
         if 9 <= now.hour <= 21 and not self.repo.meta_get("daily:" + day) \
-                and _hash_int("daily:" + day, 0, 100) < 15:
+                and _hash_int("daily:" + day, 0, 100) < 15 \
+                and not self._amo_claimed(day, 0, 24 * 60,
+                                          words=("纸巾", "牙膏", "洗衣液")):
             name = _pick(day, "daily", (("纸巾", 1), ("牙膏", 1), ("洗衣液", 1)))[0]
             out.append(await self.consume.buy_item(name, 1, idem="daily:" + day, when="daily"))
             self.repo.meta_set("daily:" + day, "1")
@@ -442,7 +444,9 @@ class FinanceDaily:
                                              words=("奶茶", "果茶")):
                         out.append(await self.consume.buy_item("奶茶", 1, idem="impulse:" + day, when="impulse"))
                 elif roll < 75:
-                    out.append(await self.consume.buy_item("盲盒", 1, idem="impulse:" + day, when="impulse"))
+                    if not self._amo_claimed(day, max(0, minutes - 720), minutes + 1,
+                                             words=("盲盒",)):
+                        out.append(await self.consume.buy_item("盲盒", 1, idem="impulse:" + day, when="impulse"))
                 else:
                     amount = _hash_int("clothes:" + day, 10000, 30000)
                     out.append(await exp.spend("impulse", "买衣服", amount, day=day,

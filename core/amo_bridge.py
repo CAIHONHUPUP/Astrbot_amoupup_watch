@@ -707,7 +707,11 @@ class FinanceLink:
                     merged = old.rstrip("。；; ") + "；" + text
                 else:
                     merged = old
-            amo.db.save_diary(day, hour, merged, source="finance")
+            try:
+                amo.db.save_diary(day, hour, merged, source="finance")
+            except TypeError:
+                # 测试替身/老版本 save_diary 不接受 source
+                amo.db.save_diary(day, hour, merged)
             return True
         except Exception as exc:
             isolated("finance.small_diary", exc)
