@@ -22,6 +22,13 @@ CATALOG = {
     "奶茶": 1500, "盲盒": 5900,
 }
 
+#: 三餐时段 → 账本分类。显式给，别让「面条 × 1」被文字规则猜成午餐。
+WHEN_META = {
+    "breakfast": ("餐饮", "早餐"),
+    "lunch": ("餐饮", "午餐"),
+    "dinner": ("餐饮", "晚餐"),
+}
+
 #: 允许的区间（分），用于校验价格没跑偏
 RANGES = {
     "快餐": (1500, 2500), "面条": (1200, 1800), "米饭套餐": (1800, 2800),
@@ -56,8 +63,19 @@ class FinanceConsume:
             return {"ok": False, "message": "不认识这个商品：%s" % name}
         amount = price * qty
         idem = str(idem or ("consume:%s:%s:%d" % (name, when or __import__("time").strftime("%Y%m%d%H%M"), qty)))
-        result = await self.finance.expense(amount, "%s × %d" % (name, qty), idem,
-                                           necessary=False, quiet=True)
+        label = "%s × %d" % (name, qty)
+        meta = WHEN_META.get(str(when or "").strip().lower())
+        extra = {} if meta is None else {
+            "category": meta[0], "sub_category": meta[1],
+            "item_name": name, "trigger_reason": label,
+        }
+        try:
+            result = await self.finance.expense(amount, label, idem, necessary=False,
+                                                quiet=True, **extra)
+        except TypeError:
+            # 测试替身/老适配器不接受分类参数：退回最小调用（生产实现始终支持）
+            result = await self.finance.expense(amount, "%s × %d" % (name, qty), idem,
+                                                necessary=False, quiet=True)
         if not result.get("ok"):
             return {"ok": False, "message": result.get("reason") or "余额不足"}
         # 逐笔记账（分类汇总用）；长期记忆留给日终 rollup
