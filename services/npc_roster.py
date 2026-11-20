@@ -15,12 +15,25 @@ logger = logging.getLogger("watch.social")
 ROSTER: tuple[dict[str, Any], ...] = (
     {"name": "柳如烟", "circle": "friend", "relation": "闺蜜", "affinity": 88},
     {"name": "白凝冰", "circle": "friend", "relation": "死党", "affinity": 80},
-    {"name": "季博达", "circle": "work", "relation": "直属领导", "affinity": 45},
-    {"name": "方圆", "circle": "work", "relation": "普通同事", "affinity": 55},
-    {"name": "妈妈", "circle": "family", "relation": "父母", "affinity": 95},
-    {"name": "爸爸", "circle": "family", "relation": "父亲", "affinity": 92},
-    {"name": "沈幼微", "circle": "edge", "relation": "远房表姐", "affinity": 40},
+    {"name": "季博达", "circle": "work", "relation": "领导", "affinity": 45, "male": True},
+    {"name": "方圆", "circle": "work", "relation": "普通同事", "affinity": 55, "male": True},
+    {"name": "妈妈", "circle": "family", "relation": "妈妈", "affinity": 95},
+    {"name": "爸爸", "circle": "family", "relation": "爸爸", "affinity": 92},
+    {"name": "沈幼微", "circle": "edge", "relation": "表姐", "affinity": 40},
 )
+
+#: 男性 NPC：不得单独约会、不得暧昧（2026-11-20 用户口径）。
+#: 单独吃饭/喝酒/逛街/送她回家都算越界；三人以上聚餐、公司团建不算。
+MALE_NAMES = frozenset(item["name"] for item in ROSTER if item.get("male"))
+MALE_SAFE_KINDS = ("work", "help", "ceremony", "borrow")
+MALE_RULE = ("季博达、方圆是男生：只能谈工作或普通社交，"
+             "不单独吃饭喝酒逛街、不单独加班到深夜、不单独送她回家，"
+             "不许暧昧称呼或任何恋爱暗示；三人以上聚餐/团建不算。")
+
+
+def is_male(name=""):
+    return str(name or "").strip() in MALE_NAMES
+
 
 NAMES = tuple(item["name"] for item in ROSTER)
 NAME_SET = frozenset(NAMES)

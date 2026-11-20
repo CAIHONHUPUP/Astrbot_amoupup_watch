@@ -46,6 +46,10 @@ except ImportError:  # 按顶层包/单文件加载时
 
 logger = logging.getLogger("watch.social")
 
+#: 好感度分档（2026-11-20 用户口径）：≥60 正常考虑；40-59 一半概率推掉；<40 基本婉拒
+AFFINITY_ACCEPT_OK = 60
+AFFINITY_HALF_TRIES = 40
+
 #: 唯一合法的 7 个核心 NPC
 SEED = tuple((item["name"], item["circle"], item["relation"], item["affinity"])
              for item in npc_roster.ROSTER)
@@ -454,7 +458,7 @@ class SocialEngine:
             owed = int(row.get("borrowed_from_her") or 0)
             status = str(row.get("status") or "").strip()
             parts.append("%s（%s，好感 %s%s%s）" % (
-                row["name"], row["relation"], row["affinity"],
+                row["name"], self._relation_of(row["name"]), row["affinity"],
                 "，" + status if status else "",
                 "，欠我 " + human_money(owed) if owed else ""))
         return "【关系】" + "；".join(parts)
@@ -698,6 +702,19 @@ class SocialEngine:
             isolated("social.health.read", exc)
             return ""
 
+    def _relation_of(self, name):
+        """关系标签：优先读陪伴（唯一真源），读不到回退本地名单（2026-11-20）。"""
+        name = str(name or "")
+        bridge = self._bridge()
+        if bridge.ready:
+            try:
+                value = bridge.call("relation_of", name).value
+                if value:
+                    return str(value)
+            except Exception as exc:
+                isolated("social.relation.amo", exc)
+        return str((npc_roster.BY_NAME.get(name) or {}).get("relation") or "")
+
     def _windows(self, day):
         fn = getattr(self.finance, "schedule_windows", None)
         if not callable(fn):
@@ -716,6 +733,51 @@ class SocialEngine:
             if begin < other_end and other_begin < finish:
                 return row
         return None
+
+    def _affinity(self, name):
+        """这个 NPC 的好感度；没有记录返回 None（不做闸）。"""
+        getter = getattr(self.repo, "npc_get", None)
+        if not callable(getter):
+            return None
+        try:
+            row = getter(str(name)) or {}
+        except Exception as exc:
+            isolated("social.affinity.read", exc)
+            return None
+        if not row:
+            return None
+        try:
+            return int(row.get("affinity"))
+        except (TypeError, ValueError):
+            return None
+
+    def _male_gate(self, name, kind):
+        """男性 NPC 边界：单独吃饭/喝酒/逛街一律不行（2026-11-20）。"""
+        kind = str(kind or "")
+        if npc_roster.is_male(name) and kind not in npc_roster.MALE_SAFE_KINDS:
+            return "他是男生，只能谈工作或普通社交，单独出去不合适"
+        return ""
+
+    def _accept_gate(self, name, kind, day=""):
+        """接受新邀约前的硬闸：男性边界 + 好感度分档（2026-11-20）。
+
+        重复接受同一场（already existing）不走好感度闸——那是幂等重试，不是新决定。
+        好感度只影响「答不答应邀约」，从不参与称谓。
+        """
+        male = self._male_gate(name, kind)
+        if male:
+            return male
+        affinity = self._affinity(name)
+        if affinity is None:
+            return ""
+        if affinity >= AFFINITY_ACCEPT_OK:
+            return ""
+        if affinity >= AFFINITY_HALF_TRIES:
+            seed = "affinity:%s:%s" % (name, str(day or _dt.date.today().isoformat()))
+            if stable_int(seed, 0, 99) < 50:
+                return "今天有点累，不太想去"
+            return ""
+        return "不太想去"
 
     def _meal_taken(self, day, start):
         """这个饭点是不是已经有一顿饭（餐饮类邀约互斥用，2026-11-20）。"""
@@ -794,7 +856,7 @@ class SocialEngine:
         lines = []
         for row in rows:
             # 对方自己的近况（第三人称客观记录）；她的身体只看 her_state 里的真实健康
-            lines.append("%s（%s，好感 %s）最近一次：%s" % (row.get("name"), row.get("relation"),
+            lines.append("%s（%s，好感 %s）最近一次：%s" % (row.get("name"), self._relation_of(row.get("name")),
                                                           row.get("affinity"),
                                                           _brief_status(row)))
         return {"now": now.strftime("%Y-%m-%d %H:%M %A"),
@@ -874,7 +936,7 @@ class SocialEngine:
         return {
             "token": "soc-%s-%s" % (day_text, uuid.uuid4().hex[:8]),
             "kind": kind, "topic": topic_text,
-            "npc": npc, "relation": str(row.get("relation") or ""), "circle": circle,
+            "npc": npc, "relation": self._relation_of(npc), "circle": circle,
             "status": _brief_status(row),
             "place": place, "day": day_text, "start": start, "end": end, "zone": zone,
             "amount_cents": budget, "created": now.timestamp(),
@@ -1277,6 +1339,10 @@ class SocialEngine:
             return {"ok": False, "reason": "unknown_npc", "message": "这个人不在你的社交圈里"}
         kind = str(inv.get("kind") or "")
         label = str(inv.get("topic") or inv.get("label") or "")
+        # 男性 NPC 边界：任何时候都生效（2026-11-20）
+        male_gate = self._male_gate(name, kind)
+        if male_gate:
+            return {"ok": False, "reason": "boundary", "message": male_gate}
         cost = max(0, int(amount_cents or inv.get("amount_cents") or 0))
         # 模型在 accept 时还能改金额：一样要落在硬上限里
         cost = cap_budget(kind, cost)
@@ -1308,6 +1374,11 @@ class SocialEngine:
                         break
             except Exception:
                 existing = False
+        # 好感度闸：只对新邀约生效；重复接受同一场是幂等重试，不拦（2026-11-20）
+        if not existing:
+            affinity_gate = self._accept_gate(name, kind, day_text)
+            if affinity_gate:
+                return {"ok": False, "reason": "boundary", "message": affinity_gate}
         # 餐饮类邀约撞上已排的饭局：婉拒，不静默改到 7 天内某一天（2026-11-20）
         if use_start and not existing and is_meal_text(label):
             clash = self._meal_taken(day_text, use_start)
