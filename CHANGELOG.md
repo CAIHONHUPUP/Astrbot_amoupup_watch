@@ -1,3 +1,13 @@
+## 1.3.1（2026-11-20 一个饭点只吃一顿 / 约会不再误触发）
+
+- **三餐先查日程占位**：买之前看 `finance.schedule_windows` 里同饭点的 meal/social/date 餐饮块（宽窗口 6-10 / 10-15 / 16-22，按交集判定）。18:00 不会再在 19:09 的火锅前买一碗面。
+- **约会不再被陈述句误触发**：`on_date_propose` 的「foods ∩ 同意词」子串匹配改成 `looks_like_date_invite()`；他说「你慢慢吃，我也去吃饭了」不再凭空建 20:39 的约会。
+- **一个饭点只约一场**：`make_date()` 增加 `_meal_clash()`；餐饮类社交邀约撞车直接婉拒，不再静默挪到 7 天内某天。
+- **饭点窗口单一来源**：窗口/餐饮词/邀请句式统一收在 `services/date_rules.py`，三餐与约会共用。
+- **账单分类**：三餐按 slot 显式传 `category/sub_category`，「面条 × 1」不再被文字规则记成午餐。
+- **架构棘轮**：新增 `tests/test_architecture_ratchet.py` + 92 个模块的 fanout 基线，引擎不得 import main / api。
+- 测试：新增 `test_meal_booked`、`test_date_invite_guard`、`test_date_meal_conflict`、`test_architecture_ratchet`；全量 1053 passed。
+
 ## 1.3.0（2026-11-20 发版：同步 1.2.9 的社交链路收口）
 
 - 本版无新增业务逻辑；把 1.2.9 的「到点才扣钱 / 只记发生过的事 / 卡片时间口径 / 钱不够差额记账」同步到正式版。
