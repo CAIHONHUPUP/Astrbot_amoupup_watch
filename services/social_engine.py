@@ -732,7 +732,7 @@ class SocialEngine:
                 continue
             if not (begin < high and low < finish):
                 continue
-            if is_meal_text(row.get("activity")):
+            if is_meal_text(row.get("activity"), row.get("category")):
                 return str(row.get("activity") or "")
         return ""
 

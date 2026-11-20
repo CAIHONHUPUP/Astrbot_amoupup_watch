@@ -15,12 +15,12 @@ try:
     from ..guard import isolated
     from ..utils.helpers import stable_int
     from ..utils.money import idem as idem_key
-    from .date_rules import CLAIM_WINDOWS, CLAIM_WORDS
+    from .date_rules import CLAIM_WINDOWS, is_meal_text
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
     from utils.helpers import stable_int
     from utils.money import idem as idem_key
-    from services.date_rules import CLAIM_WINDOWS, CLAIM_WORDS
+    from services.date_rules import CLAIM_WINDOWS, is_meal_text
 
 WINDOWS = {
     "breakfast": ((7, 30), (9, 0)),
@@ -241,7 +241,7 @@ class FinanceDaily:
                 continue
             if not (begin < high and low < finish):
                 continue
-            if any(word in str(row.get("activity") or "") for word in CLAIM_WORDS):
+            if is_meal_text(row.get("activity"), row.get("category")):
                 return True
         return False
 
@@ -319,8 +319,11 @@ class FinanceDaily:
             flag = idem_key("meal", day, slot)
             if self.repo.meta_get(flag):
                 continue
-            if self._amo_meal_today(day, slot, now) or self._amo_booked_meal(day, slot):
+            if self._amo_meal_today(day, slot, now):
                 self.repo.meta_set(flag, "1")
+                continue
+            if self._amo_booked_meal(day, slot):
+                # 只是「这一顿有着落」，不写 flag：饭局在窗口内取消后还要能补买
                 continue
             menu = (CHEAP_MENUS if thrifty else MENUS)[slot]
             menu = self._menu_for_place(slot, menu)

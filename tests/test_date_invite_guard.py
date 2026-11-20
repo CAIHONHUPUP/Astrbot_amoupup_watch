@@ -25,6 +25,14 @@ class InviteGuardTests(unittest.TestCase):
         for text in ("去吃火锅吧", "吃火锅吗", "看电影呢？"):
             self.assertTrue(looks_like_date_invite(text), text)
 
+    def test_past_question_is_not_invite(self):
+        for text in ("你吃饭了吗", "你吃饭了吗？", "吃了没", "今天吃火锅了吗"):
+            self.assertFalse(looks_like_date_invite(text), text)
+
+    def test_imperative_without_particle_is_invite(self):
+        for text in ("去吃火锅", "吃火锅去", "好的，吃火锅", "行，那吃烤肉"):
+            self.assertTrue(looks_like_date_invite(text), text)
+
     def test_plain_statement_is_not_invite(self):
         for text in ("火锅真好吃", "这家烤肉不错", "好的", ""):
             self.assertFalse(looks_like_date_invite(text), text)

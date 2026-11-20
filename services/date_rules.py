@@ -48,20 +48,28 @@ CLAIM_WINDOWS = {
     "dinner": (16 * 60, 22 * 60),
 }
 
-#: 算「一顿饭」的活动词。奶茶/咖啡/果茶不算，避免下午茶占掉午餐位。
-CLAIM_WORDS = ("吃", "饭", "餐", "面条", "米饭", "快餐", "外卖", "火锅", "烧烤",
-               "烤肉", "聚餐", "夜宵", "宵夜", "泡面", "粥", "包子", "饺子")
+#: 算「一顿饭」的活动词。不收单字「吃」：16:30 的「吃点东西」不能占掉晚饭。
+#: 必须与陪伴侧 amo_food_cost.CLAIM_WORDS 逐字一致（契约测试比对）。
+CLAIM_WORDS = ("饭", "餐", "面条", "牛肉面", "米饭", "快餐", "包子", "豆浆", "白粥",
+               "粥", "外卖", "家常菜", "泡面", "饺子", "汉堡", "披萨", "烧烤", "肠粉",
+               "米粉", "火锅", "烤肉", "聚餐", "夜宵", "宵夜", "麻辣烫", "小龙虾", "寿司")
 
 #: 明确指向「你/咱们」的邀请词；带这些词才算他在约她。
 INVITE_TOGETHER = ("一起", "一块", "咱俩", "咱们", "陪我", "带你", "请你", "约你",
                    "和你", "跟你", "我们去", "要不要", "去不去", "好不好", "怎么样")
+
+#: 过去时/问近况（「你吃饭了吗」「吃了没」），不是邀约。
+INVITE_PAST = ("了吗", "了没", "了没有", "吃过没", "吃了吗", "有没有吃", "吃了没")
 
 #: 陈述句特征：他在说自己/别人去吃饭，不是约她。
 INVITE_SELF_STATEMENT = ("我也", "我今天", "我这", "我先", "我在", "你们", "他们",
                          "你慢慢", "你自己", "我马上")
 
 
-def is_meal_text(text):
+def is_meal_text(text, category=""):
+    """category=meal 的块本身就是一顿；social/date 只有命中餐饮词才算。"""
+    if str(category or "") == "meal":
+        return True
     body = str(text or "")
     return any(word in body for word in CLAIM_WORDS)
 
@@ -95,12 +103,22 @@ def looks_like_date_invite(text):
     body = str(text or "").strip()
     if not body:
         return False
+    if any(word in body for word in INVITE_PAST):
+        return False  # 「你吃饭了吗」是在问近况
     together = any(word in body for word in INVITE_TOGETHER)
     if any(word in body for word in INVITE_SELF_STATEMENT) and not together:
         return False
     if together:
         return True
-    return body.endswith(("吧", "吗", "呢", "？", "?")) or body.endswith("吧。")
+    tail = body.rstrip("。！!")
+    if body.endswith(("吧", "吗", "呢", "？", "?")):
+        return True
+    # 祈使：「去吃火锅」「吃火锅去」「好的，吃火锅」
+    if body.startswith(("去", "走", "来")) or tail.endswith(("去", "走")):
+        return True
+    if body.startswith(("好", "行", "可以", "嗯")) and any(word in body for word in ("吃", "饭")):
+        return True
+    return False
 
 
 def compact(text):

@@ -53,7 +53,8 @@ def test_dinner_booked_skips_dinner(env):
     done = asyncio.run(daily.tick(dt.datetime(2026, 11, 20, 18, 0)))
     assert done == []
     assert finance.calls == []
-    assert repo.meta_get("meal:2026-11-20:dinner")
+    # 占位不写死 flag：饭局在窗口内取消后还要能补买
+    assert not repo.meta_get("meal:2026-11-20:dinner")
 
 
 def test_no_booking_still_eats(env):

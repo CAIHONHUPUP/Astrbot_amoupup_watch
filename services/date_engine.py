@@ -172,7 +172,7 @@ def _meal_clash(plugin, when_dt):
         if not (begin < high and low < finish):
             continue
         text = str(row.get("activity") or "")
-        if is_meal_text(text):
+        if is_meal_text(text, row.get("category")):
             return text
     return ""
 
