@@ -49,9 +49,30 @@ DISH_WORDS = ("酸菜鱼", "火锅", "寿司", "烤肉", "烧烤", "日料", "�
 FRIEND_WORDS = ("朋友", "同事", "表姐", "表妹", "闺蜜", "同学", "聚餐",
                 "一起吃饭", "约我", "请我")
 
+#: 判重宽窗口：和陪伴 amo_food_cost.MEAL_WINDOWS 同一口径（tests/test_meal_claim_contract.py 比对）。
+#: 窄窗口 WINDOWS 决定「几点吃」，这里只管「这一顿有没有着落」。
+CLAIM_WINDOWS = {
+    "breakfast": (6 * 60, 10 * 60),
+    "lunch": (10 * 60, 15 * 60),
+    "dinner": (16 * 60, 22 * 60),
+}
+
+#: 算「一顿饭」的活动词（奶茶/咖啡不算，避免下午茶占掉午餐位）。
+CLAIM_WORDS = ("吃", "饭", "餐", "面条", "米饭", "快餐", "外卖", "火锅", "烧烤",
+               "烤肉", "聚餐", "夜宵", "宵夜", "泡面", "粥", "包子", "饺子")
+
 #: 吃饭地点关键词（2026-11-19）
 HOME_WORDS = ("家", "宿舍", "出租屋", "住处", "公寓")
 CANTEEN_WORDS = ("食堂", "饭堂")
+
+
+def _minutes(hhmm):
+    """HH:MM → 分钟；格式不对返回 None（占位判定用）。"""
+    try:
+        hour, minute = str(hhmm or "").split(":")[:2]
+        return int(hour) * 60 + int(minute)
+    except (TypeError, ValueError):
+        return None
 
 
 def _hash_int(text, low, high):
@@ -202,6 +223,38 @@ class FinanceDaily:
                 return True
         return False
 
+    def _amo_booked_meal(self, day, slot):
+        """这个饭点是不是已经在日程里有着落（饭局/约会/餐饮块）。
+
+        2026-11-20 现场：18:00 买了面条，19:09 又和柳如烟吃火锅。社交消费是
+        「到点才扣」，18:00 账本干净，只看流水必然漏。窄窗口（18:00-19:30）
+        和 19:09 的块只重叠 21 分钟，所以这里用宽窗口按「有交集」判定。
+        """
+        window = CLAIM_WINDOWS.get(slot)
+        if not window:
+            return False
+        low, high = window
+        fn = getattr(self.finance, "schedule_windows", None)
+        if not callable(fn):
+            return False
+        try:
+            rows = list(fn(str(day)) or [])
+        except Exception as exc:
+            isolated("daily.booked.schedule", exc)
+            return False
+        for row in rows:
+            if str(row.get("category") or "") not in ("meal", "social", "date"):
+                continue
+            begin = _minutes(row.get("start"))
+            finish = _minutes(row.get("end"))
+            if begin is None or finish is None or finish <= begin:
+                continue
+            if not (begin < high and low < finish):
+                continue
+            if any(word in str(row.get("activity") or "") for word in CLAIM_WORDS):
+                return True
+        return False
+
     def _amo_claimed(self, day, low, high, prefixes=(), words=()):
         """共享钱包里今天这个时间窗是否已有指定来源/说法的支出。"""
         amo = self._amo()
@@ -276,7 +329,7 @@ class FinanceDaily:
             flag = idem_key("meal", day, slot)
             if self.repo.meta_get(flag):
                 continue
-            if self._amo_meal_today(day, slot, now):
+            if self._amo_meal_today(day, slot, now) or self._amo_booked_meal(day, slot):
                 self.repo.meta_set(flag, "1")
                 continue
             menu = (CHEAP_MENUS if thrifty else MENUS)[slot]
