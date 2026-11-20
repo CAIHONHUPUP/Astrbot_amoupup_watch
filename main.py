@@ -724,6 +724,10 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             from .services.date_engine import attend_date, find_pending, make_date
         except ImportError:
             from services.date_engine import attend_date, find_pending, make_date
+        try:
+            from .services.date_rules import looks_like_date_invite
+        except ImportError:
+            from services.date_rules import looks_like_date_invite
         pending = find_pending(self, "")
         if pending and any(w in text for w in ("我到了", "你人呢", "去吃", "走吧", "开吃")):
             out = await attend_date(self, pending.get("title"))
@@ -733,7 +737,9 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
         if pending:
             return
         foods = ("火锅", "烤肉", "电影", "逛街", "吃饭", "咖啡")
-        if any(f in text for f in foods) and any(w in text for w in ("好呀", "好的", "去吧", "去吃", "可以", "行", "约")):
+        # 2026-11-20：以前是 foods ∩ 同意词 的子串匹配，他说「你慢慢吃，我也去吃饭了」
+        # 就同时命中「吃饭」和「去吃」，凭空建了一场 20:39 的约会。
+        if any(f in text for f in foods) and looks_like_date_invite(text):
             activity = next((f for f in foods if f in text), "吃饭")
             when = "中午" if "中午" in text else ("晚上" if "晚上" in text else "")
             out = await make_date(self, activity, when)

@@ -40,6 +40,69 @@ BASE_COST = (("火锅", 30000), ("烤肉", 28000), ("电影", 12000),
 DEFAULT_COST = 20000
 
 
+#: 饭点占位窗口（宽）：决定「这一顿有没有着落」，与窄窗口（几点吃）分工不同。
+#: 陪伴侧 amo_food_cost.CLAIM_WINDOWS 必须同口径（tests/test_meal_claim_contract.py 比对）。
+CLAIM_WINDOWS = {
+    "breakfast": (6 * 60, 10 * 60),
+    "lunch": (10 * 60, 15 * 60),
+    "dinner": (16 * 60, 22 * 60),
+}
+
+#: 算「一顿饭」的活动词。奶茶/咖啡/果茶不算，避免下午茶占掉午餐位。
+CLAIM_WORDS = ("吃", "饭", "餐", "面条", "米饭", "快餐", "外卖", "火锅", "烧烤",
+               "烤肉", "聚餐", "夜宵", "宵夜", "泡面", "粥", "包子", "饺子")
+
+#: 明确指向「你/咱们」的邀请词；带这些词才算他在约她。
+INVITE_TOGETHER = ("一起", "一块", "咱俩", "咱们", "陪我", "带你", "请你", "约你",
+                   "和你", "跟你", "我们去", "要不要", "去不去", "好不好", "怎么样")
+
+#: 陈述句特征：他在说自己/别人去吃饭，不是约她。
+INVITE_SELF_STATEMENT = ("我也", "我今天", "我这", "我先", "我在", "你们", "他们",
+                         "你慢慢", "你自己", "我马上")
+
+
+def is_meal_text(text):
+    body = str(text or "")
+    return any(word in body for word in CLAIM_WORDS)
+
+
+def slot_of_minute(minute):
+    """分钟数 → 饭点名；落在加餐空档（15-16、22-24）返回空串。"""
+    for slot, (low, high) in CLAIM_WINDOWS.items():
+        if int(low) <= int(minute) < int(high):
+            return slot
+    return ""
+
+
+def claim_slot(when_dt):
+    """datetime → 饭点名。"""
+    return slot_of_minute(int(when_dt.hour) * 60 + int(when_dt.minute))
+
+
+def slot_of_hhmm(text):
+    """HH:MM → 饭点名；格式不对返回空串。"""
+    minute = clock_minutes(text)
+    return "" if minute is None else slot_of_minute(minute)
+
+
+def looks_like_date_invite(text):
+    """他这句话是不是在约她（2026-11-20）。
+
+    现场：他说「你慢慢吃，我也去吃饭了」，旧逻辑同时命中 foods(吃饭) 和
+    trigger(去吃)，直接建了一场 20:39 的约会。这里要求：要么带「一起/咱们/
+    陪你」这类指向词，要么是祈使/疑问句；他在说自己或别人的陈述句一律不算。
+    """
+    body = str(text or "").strip()
+    if not body:
+        return False
+    together = any(word in body for word in INVITE_TOGETHER)
+    if any(word in body for word in INVITE_SELF_STATEMENT) and not together:
+        return False
+    if together:
+        return True
+    return body.endswith(("吧", "吗", "呢", "？", "?")) or body.endswith("吧。")
+
+
 def compact(text):
     return re.sub(r"[\s，。！？!?、~～…,.]+", "", str(text or ""))
 

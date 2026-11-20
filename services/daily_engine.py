@@ -15,10 +15,12 @@ try:
     from ..guard import isolated
     from ..utils.helpers import stable_int
     from ..utils.money import idem as idem_key
+    from .date_rules import CLAIM_WINDOWS, CLAIM_WORDS
 except ImportError:  # 按顶层包/单文件加载时
     from guard import isolated
     from utils.helpers import stable_int
     from utils.money import idem as idem_key
+    from services.date_rules import CLAIM_WINDOWS, CLAIM_WORDS
 
 WINDOWS = {
     "breakfast": ((7, 30), (9, 0)),
@@ -48,18 +50,6 @@ DISH_WORDS = ("酸菜鱼", "火锅", "寿司", "烤肉", "烧烤", "日料", "�
 #: 跟朋友/同事/亲戚吃饭（没点名吃什么时可以抽一个饭店菜）
 FRIEND_WORDS = ("朋友", "同事", "表姐", "表妹", "闺蜜", "同学", "聚餐",
                 "一起吃饭", "约我", "请我")
-
-#: 判重宽窗口：和陪伴 amo_food_cost.MEAL_WINDOWS 同一口径（tests/test_meal_claim_contract.py 比对）。
-#: 窄窗口 WINDOWS 决定「几点吃」，这里只管「这一顿有没有着落」。
-CLAIM_WINDOWS = {
-    "breakfast": (6 * 60, 10 * 60),
-    "lunch": (10 * 60, 15 * 60),
-    "dinner": (16 * 60, 22 * 60),
-}
-
-#: 算「一顿饭」的活动词（奶茶/咖啡不算，避免下午茶占掉午餐位）。
-CLAIM_WORDS = ("吃", "饭", "餐", "面条", "米饭", "快餐", "外卖", "火锅", "烧烤",
-               "烤肉", "聚餐", "夜宵", "宵夜", "泡面", "粥", "包子", "饺子")
 
 #: 吃饭地点关键词（2026-11-19）
 HOME_WORDS = ("家", "宿舍", "出租屋", "住处", "公寓")

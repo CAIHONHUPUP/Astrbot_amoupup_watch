@@ -14,12 +14,12 @@ except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
     from core.amo_bridge import AmoBridge
 
-from .date_rules import (AGREE_EXACT, CANCEL_WORDS, GENERIC_YES, PAUSE_MAX_MINUTES,
-                         base_cost, clock_minutes, compact, human_day_period, human_when,
-                         is_agreement, is_arrival, is_date_end, is_date_pause,
-                         is_date_resume, is_interrupt, meeting_period, minutes,
-                         parse_when, pay_mode, pick_pending, schedule_conflict,
-                         truncate_finished_blocks)
+from .date_rules import (AGREE_EXACT, CANCEL_WORDS, CLAIM_WINDOWS, GENERIC_YES,
+                         PAUSE_MAX_MINUTES, base_cost, claim_slot, clock_minutes, compact,
+                         human_day_period, human_when, is_agreement, is_arrival,
+                         is_date_end, is_date_pause, is_date_resume, is_interrupt,
+                         is_meal_text, meeting_period, minutes, parse_when, pay_mode,
+                         pick_pending, schedule_conflict, truncate_finished_blocks)
 
 # 纯规则在 services/date_rules.py；这里保留旧名，老代码/测试继续可用。
 _compact = compact
@@ -140,6 +140,43 @@ def _save(plugin, rows):
         isolated("date_engine._save", exc)
 
 
+def _meal_clash(plugin, when_dt):
+    """同一个饭点已经有一顿饭 → 返回那条活动文字（2026-11-20）。
+
+    现场：19:09 已经和柳如烟约了火锅，20:39 又凭空多出一场「和老公吃饭」。
+    schedule_conflict 特意 skip 了 social（怕「约会撞社交」误报），所以这里单独判：
+    只认餐饮类活动，逛街/电影/咖啡不算占位。
+    """
+    slot = claim_slot(when_dt)
+    if not slot:
+        return ""
+    bridge = _bridge(plugin)
+    if not bridge.ready:
+        return ""
+    day = when_dt.date().isoformat()
+    low, high = CLAIM_WINDOWS[slot]
+    try:
+        rows = list(bridge.schedule().get(day) or [])
+    except Exception as exc:
+        isolated("date_engine.meal_clash", exc)
+        return ""
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("category") or "") not in ("meal", "social", "date"):
+            continue
+        begin = clock_minutes(row.get("start"))
+        finish = clock_minutes(row.get("end"))
+        if begin is None or finish is None or finish <= begin:
+            continue
+        if not (begin < high and low < finish):
+            continue
+        text = str(row.get("activity") or "")
+        if is_meal_text(text):
+            return text
+    return ""
+
+
 async def make_date(plugin, title, when="", deposit_cents=0, now=None):
     """约定一件事：写进她自己的日程 + 进入期待状态。"""
     title = str(title or "").strip()
@@ -147,6 +184,13 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
         return {"ok": False, "message": "要约什么？" }
     now = now or _dt.datetime.now()
     when_dt = _parse_when(when, now)
+    # 一个饭点只允许一顿：已经约了饭局就不能再排一场（餐饮类才判）
+    if is_meal_text(title):
+        clash = _meal_clash(plugin, when_dt)
+        if clash:
+            return {"ok": False, "reason": "meal_conflict",
+                    "message": "那天%s已经约了「%s」，一天就一顿正餐，换个时间吧"
+                               % (human_day_period(when_dt, now), clash)}
     deposit = max(0, int(deposit_cents or 0))
     if not deposit and any(word in title for word in ("火锅", "烤肉", "自助")):
         deposit = 5000  # 订位定金：50 元

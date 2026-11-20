@@ -24,6 +24,7 @@ try:
     from ..utils.helpers import stable_int
     from ..utils.humanize import human_money, humanize_numbers
     from . import npc_roster
+    from .date_rules import CLAIM_WINDOWS, is_meal_text, slot_of_hhmm
     from .social_rules import (INVITE_TTL_HOURS, INVITE_WINDOW, MAX_PER_DAY, MIN_GAP_HOURS,
                                PENDING, can_invite_decision, common_sense, day_label,
                                find_free_day, invite_idem, invite_status, is_off_day,
@@ -35,6 +36,7 @@ except ImportError:  # 按顶层包/单文件加载时
     from utils.helpers import stable_int
     from utils.humanize import human_money, humanize_numbers
     from services import npc_roster
+    from services.date_rules import CLAIM_WINDOWS, is_meal_text, slot_of_hhmm
     from services.social_rules import (INVITE_TTL_HOURS, INVITE_WINDOW, MAX_PER_DAY,
                                        MIN_GAP_HOURS, PENDING, can_invite_decision,
                                        common_sense, day_label, find_free_day,
@@ -715,6 +717,25 @@ class SocialEngine:
                 return row
         return None
 
+    def _meal_taken(self, day, start):
+        """这个饭点是不是已经有一顿饭（餐饮类邀约互斥用，2026-11-20）。"""
+        slot = slot_of_hhmm(start)
+        if not slot:
+            return ""
+        low, high = CLAIM_WINDOWS[slot]
+        for row in self._windows(day):
+            if str(row.get("category") or "") not in ("meal", "social", "date"):
+                continue
+            begin = _minutes(row.get("start"))
+            finish = _minutes(row.get("end"))
+            if finish <= begin:
+                continue
+            if not (begin < high and low < finish):
+                continue
+            if is_meal_text(row.get("activity")):
+                return str(row.get("activity") or "")
+        return ""
+
     # ---------- 冷却闸（防止 4 分钟 5 次邀约） ----------
     def can_invite(self, now=None, npc=""):
         now = now or _dt.datetime.now()
@@ -1278,6 +1299,12 @@ class SocialEngine:
                         break
             except Exception:
                 existing = False
+        # 餐饮类邀约撞上已排的饭局：婉拒，不静默改到 7 天内某一天（2026-11-20）
+        if use_start and not existing and is_meal_text(label):
+            clash = self._meal_taken(day_text, use_start)
+            if clash:
+                return {"ok": False, "reason": "meal_conflict",
+                        "message": "那个点已经约好「%s」了，一顿饭不能吃两次" % clash}
         if use_start and not existing:
             shifted = find_free_day(_dt.date.fromisoformat(day_text), use_start, use_end,
                                     self._conflict, max_days=7)
