@@ -943,7 +943,7 @@ class FinanceLink:
         if amo is None:
             return False
         try:
-            item = {
+            item: dict = {
                 "start": str(start or "00:00"), "end": str(end or "23:59"),
                 "activity": str(activity), "place": str(place),
                 "category": str(category), "detail": str(detail or activity),
