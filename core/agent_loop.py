@@ -711,7 +711,11 @@ class FinanceDecision:
                 if getattr(self, "_news_used", False):
                     extra = "看了新闻，" + ("参考着做了决定。" if executed.get("ok") else "没太看懂，没动。")
                 text = "今天%s，%s。%s" % (decision["reason"], mood["word"], extra)
-                amo.db.save_diary(now.date().isoformat(), "%02d" % now.hour, text)
+                try:
+                    amo.db.save_diary(now.date().isoformat(), "%02d" % now.hour, text,
+                                      source="finance")
+                except TypeError:  # 老版本/测试替身不接受 source
+                    amo.db.save_diary(now.date().isoformat(), "%02d" % now.hour, text)
         except Exception as exc:
             isolated("finance.decision.diary", exc)
 

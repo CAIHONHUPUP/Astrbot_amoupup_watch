@@ -960,9 +960,11 @@ class FinanceLink:
                         and str(row.get("end") or "") == item["end"]
                         and str(row.get("activity") or "") == item["activity"]):
                     return True
-            # 社交/餐饮/约会块进锁来源：陪伴的整点重算不许覆盖（2026-11-20）
-            source = "social" if str(category) in ("social", "date", "meal", "ceremony") else "watch"
-            result = amo.state.add_schedule_item(str(day), item, source=source,
+            # 只给社交/餐饮/约会这一条打锁，不动当天的其它块（2026-11-20）：
+            # 陪伴的整点重算遇到 locked 块会让行。
+            if str(category) in ("social", "date", "meal", "ceremony"):
+                item["locked"] = True
+            result = amo.state.add_schedule_item(str(day), item, source="watch",
                                                  reason=str(activity))
             return bool(isinstance(result, dict) and result.get("changed", True))
         except Exception as exc:
