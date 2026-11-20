@@ -45,6 +45,16 @@ class CardMixin:
 
     def _snapshot_real(self) -> dict:
         cash = self.finance.balance_cents() or 0
+        held = 0
+        try:
+            fn = getattr(self.finance, "held_cents", None)
+            held = int(fn() or 0) if callable(fn) else 0
+        except Exception as exc:
+            isolated("finance.snapshot.held", exc)
+            held = 0
+        # 可取也不能超过「可花」：冻结的那部分不能转走，否则冻结就成了空头支票
+        withdrawable = self.finance.withdrawable_cents() or 0
+        withdrawable = max(0, min(int(withdrawable), int(cash) - int(held)))
         positions, market_value, total_pnl, trades = self._snapshot_holdings()
         loans, debt, monthly, rate, mood, decision, help_state = self._snapshot_loans()
         life, market = self._snapshot_life()
@@ -109,9 +119,10 @@ class CardMixin:
         return {
             "mode": "real",
             "wallet": {"total": (cash + market_value + assets_value - debt) / 100.0,
-                       "available": cash / 100.0,
+                       "available": max(0, cash - held) / 100.0,
+                       "held": held / 100.0,
                        "assets": assets_value / 100.0, "liabilities": debt / 100.0,
-                       "withdrawable": (self.finance.withdrawable_cents() or 0) / 100.0,
+                       "withdrawable": withdrawable / 100.0,
                        "market_value": market_value / 100.0,
                        "today_pnl": total_pnl / 100.0,
                        "today_pct": (total_pnl / max(1, market_value - total_pnl) * 100.0)},

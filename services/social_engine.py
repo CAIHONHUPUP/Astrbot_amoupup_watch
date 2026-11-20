@@ -62,6 +62,13 @@ KIND_PLACES = {
 KIND_BUDGET = {"meal": 12000, "drink": 8000, "shopping": 25000, "ceremony": 40000,
                "work": 0, "help": 0, "borrow": 60000, "other": 10000}
 
+#: 硬上限：模型给的金额只能是「大概」，不能随口开到天文数字（2026-11-20 用户要求）
+KIND_MAX = {"meal": 30000, "drink": 12000, "shopping": 60000, "ceremony": 120000,
+            "work": 0, "help": 0, "borrow": 60000, "other": 20000}
+
+#: 对方说「我请 / 请你 / 我买单」= 这顿不花她的钱（2026-11-20 线上：如烟说「我请」却扣了她 200）
+TREAT_WORDS = ("我请", "请你", "请你吃", "我买单", "我来买", "我付", "我出钱")
+
 #: 「最近关系动态」只认这些事件；别的模块（基金/股票/工具名）绝不许混进来。
 SOCIAL_KIND_PREFIX = "social:"
 SOCIAL_KINDS = ("social:invite", "social:accept", "social:reject", "social:expire",
@@ -189,6 +196,8 @@ def _dynamic_text(kind, payload, now=None):
     note = str(payload.get("note") or "").strip()
     fallback = str(payload.get("fallback") or "").strip()
     if k.endswith(":accept"):
+        if payload.get("cancelled"):
+            return "本来约了%s，后来没去成" % (str(payload.get("npc") or "") or "朋友")
         day = str(payload.get("day") or "")
         end = str(payload.get("end") or payload.get("start") or "")
         until = _ts(day, end, 0.0) if (day and end) else 0.0
@@ -200,6 +209,51 @@ def _dynamic_text(kind, payload, now=None):
                                      str(payload.get("place") or ""))
         return note or said or fallback
     return said or note or fallback
+
+
+def cap_budget(kind, cents):
+    """金额硬上限：模型给多少都要落在 KIND_MAX 里。"""
+    try:
+        value = max(0, int(cents or 0))
+    except (TypeError, ValueError):
+        value = 0
+    return min(value, int(KIND_MAX.get(str(kind or ""), 20000)))
+
+
+def grounded_ask(ask, npc, status, topic):
+    """把「对方自己的处境」安到她头上的邀约文案打回去。
+
+    2026-11-20 线上：如烟自己的状态是「跟男朋友冷战了三天」，
+    发出来的微信却是「听说你跟对象冷战好几天了」——主语说反了。
+    """
+    text = str(ask or "").strip()
+    status = str(status or "").strip()
+    if not text or not status:
+        return text
+    for word in ("冷战", "发烧", "感冒", "失恋", "生病", "住院", "相亲", "辞职", "离婚"):
+        if word in status and re.search(r"你[^，。！？\s]{0,8}" + re.escape(word), text):
+            base = status.strip("。！？ ")
+            target = str(topic or "").strip() or "见个面"
+            return "最近%s，有空一起%s吗？" % (base, target)
+    return text
+
+
+def when_text(day, start, created_at=None):
+    """卡片上显示「什么时候的事」：未来的约显示约定时间，不是答应的时间。"""
+    day = str(day or "")
+    start = str(start or "")
+    if day and start:
+        return "%s %s" % (day[5:], start)
+    try:
+        created = float(created_at or 0)
+    except (TypeError, ValueError):
+        created = 0.0
+    if not created:
+        return ""
+    try:
+        return time.strftime("%m-%d %H:%M", time.localtime(created))
+    except (ValueError, OSError):
+        return ""
 
 
 def humanize_dynamic(kind, payload, now=None):
@@ -223,7 +277,11 @@ def panel_events(rows, limit=None):
     for row in rows or []:
         if not isinstance(row, dict) or not is_social_kind(row.get("kind")):
             continue
-        text = humanize_dynamic(row.get("kind"), row.get("payload"))
+        payload = row.get("payload") or {}
+        if isinstance(payload, dict) and not payload.get("day") and row.get("day"):
+            payload = dict(payload)
+            payload["day"] = str(row.get("day"))
+        text = humanize_dynamic(row.get("kind"), payload)
         if not text:
             text = str(row.get("display") or "").strip()
             if _CODE_ONLY.match(text) or _CODE_TOKEN.search(text):
@@ -232,6 +290,9 @@ def panel_events(rows, limit=None):
             continue
         row = dict(row)
         row["display"] = text
+        row["when_text"] = when_text(payload.get("day"), payload.get("start"),
+                                     row.get("created_at"))
+        row["created_text"] = when_text("", "", row.get("created_at"))
         out.append(row)
         if limit and len(out) >= int(limit):
             break
@@ -430,6 +491,10 @@ class SocialEngine:
             return False
         clean = humanize_numbers(npc_roster.sanitize(text, npc))
         payload = dict(extra or {})
+        # 事件日期必须进 payload：面板靠 payload.day 判断「到点前只说约定、过后才说回忆」，
+        # 只写进 events.day 列的话（2026-11-20 那场火锅）会当场就显示成已经吃完了。
+        if day and not payload.get("day"):
+            payload["day"] = str(day)
         payload["fallback"] = self.fallback_line(kind, npc=npc, topic=topic, label=label,
                                                  place=place, start=start, end=end,
                                                  amount_cents=amount_cents, status=status)
@@ -466,10 +531,16 @@ class SocialEngine:
         out = []
         for row in rows:
             payload = row.get("payload") or {}
+            if isinstance(payload, dict) and not payload.get("day") and row.get("day"):
+                payload = dict(payload)
+                payload["day"] = str(row.get("day"))
             text = humanize_dynamic(row.get("kind"), payload)
             if not text:
                 continue
             row["display"] = text
+            row["when_text"] = when_text(payload.get("day"), payload.get("start"),
+                                         row.get("created_at"))
+            row["created_text"] = when_text("", "", row.get("created_at"))
             out.append(row)
         return out
 
@@ -530,6 +601,32 @@ class SocialEngine:
             return int(self.finance.balance_cents() or 0)
         except Exception:
             return 0
+
+    def _available(self):
+        """可花的钱（余额减掉已冻结的）；旧钱包没有 available 就退回余额。"""
+        try:
+            fn = getattr(self.finance, "available_cents", None)
+            if callable(fn):
+                value = fn()
+                if value is not None:
+                    return int(value)
+        except Exception as exc:
+            isolated("social.available", exc)
+        return self._cash()
+
+    def _release_charge_hold(self, charge):
+        """把答应时冻结的那笔解冻（取消/付不出/过期时）。"""
+        hold_idem = str((charge or {}).get("hold_idem") or "")
+        if not hold_idem:
+            return False
+        fn = getattr(self.finance, "release_hold", None)
+        if not callable(fn):
+            return False
+        try:
+            return bool(fn(hold_idem))
+        except Exception as exc:
+            isolated("social.release_hold", exc)
+            return False
 
     def _bridge(self):
         """跨插件调用门面（Phase 14）：不再自己 finance._amo() 后随手调。"""
@@ -739,6 +836,8 @@ class SocialEngine:
         budget = int(data.get("budget_cents") or 0)
         if budget <= 0:
             budget = KIND_BUDGET.get(kind, 10000)
+        budget = cap_budget(kind, budget)
+        topic_text = str(data.get("topic") or "").strip()[:20]
         ask = _retime_ask(str(data.get("ask") or ""), target, now, start)
         wrong_name = str(data.get("npc") or "").strip()
         if wrong_name and wrong_name != npc:
@@ -746,9 +845,14 @@ class SocialEngine:
         ask = humanize_numbers(npc_roster.sanitize(ask, npc))
         if not ask:
             return None
+        # 对方自己的处境不能安到她头上（「我冷战」被写成「你冷战」）；顺手把「我请」变成不花钱
+        ask = grounded_ask(ask, npc, _brief_status(row), topic_text)
+        ask = humanize_numbers(npc_roster.sanitize(ask, npc)) or ask
+        if any(word in ask for word in TREAT_WORDS):
+            budget = 0
         return {
             "token": "soc-%s-%s" % (day_text, uuid.uuid4().hex[:8]),
-            "kind": kind, "topic": str(data.get("topic") or "").strip()[:20],
+            "kind": kind, "topic": topic_text,
             "npc": npc, "relation": str(row.get("relation") or ""), "circle": circle,
             "status": _brief_status(row),
             "place": place, "day": day_text, "start": start, "end": end, "zone": zone,
@@ -935,6 +1039,186 @@ class SocialEngine:
         except Exception as exc:
             isolated("social.drop_schedule", exc)
 
+    # ---------- 到点结算：答应时只占日程，到点才真的花钱 ----------
+    CHARGE_KEY = "social:charges"
+    CHARGE_TTL = 2 * 86400
+
+    def pending_charges(self):
+        """还没结算的邀约扣款（kv 持久化，重载/重启都不丢）。"""
+        if self.repo is None:
+            return []
+        try:
+            raw = self.repo.meta_get(self.CHARGE_KEY, []) or []
+        except Exception as exc:
+            isolated("social.charges.read", exc)
+            return []
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                return []
+        rows = raw if isinstance(raw, list) else []
+        return [dict(item) for item in rows if isinstance(item, dict) and item.get("idem")]
+
+    def _save_charges(self, items):
+        if self.repo is None:
+            return False
+        try:
+            return bool(self.repo.meta_set(
+                self.CHARGE_KEY,
+                json.dumps(list(items)[-60:], ensure_ascii=False)))
+        except Exception as exc:
+            isolated("social.charges.save", exc)
+            return False
+
+    def _queue_charge(self, charge):
+        """把「到点再扣」的账记下来；同一场约会永远只有一笔（事件级幂等键）。"""
+        idem = str((charge or {}).get("idem") or "")
+        if not idem:
+            return False
+        items = self.pending_charges()
+        if any(str(item.get("idem") or "") == idem for item in items):
+            return True
+        items.append(dict(charge))
+        return self._save_charges(items)
+
+    def _scheduled_still_there(self, charge):
+        """日程被改口取消/整块换掉，就不该再扣这顿饭钱。"""
+        day = str((charge or {}).get("day") or "")
+        name = str((charge or {}).get("npc") or "")
+        if not day or not name:
+            return True
+        try:
+            rows = self.finance.schedule_windows(day) or []
+        except Exception as exc:
+            isolated("social.charges.schedule", exc)
+            return True
+        if not rows:
+            return True
+        return any(name in str(row.get("activity") or "") for row in rows)
+
+    def _mark_event(self, charge, patch):
+        """给事件打状态（occurred / cancelled / paid / unpaid），面板靠它说话。"""
+        try:
+            event_id = int((charge or {}).get("event_db") or 0)
+        except (TypeError, ValueError):
+            event_id = 0
+        if not event_id or self.repo is None:
+            return False
+        for row in self.repo.events(60) or []:
+            if int(row.get("id") or 0) != event_id:
+                continue
+            payload = dict(row.get("payload") or {})
+            payload.update(patch)
+            return bool(self.repo.update_event(event_id, payload))
+        return False
+
+    async def settle_charges(self, now=None):
+        """到点把答应过的邀约真实扣款；钱不够就付得起的部分、剩下的记成欠人家的。"""
+        items = self.pending_charges()
+        if not items:
+            return {"paid": 0, "pending": 0, "dropped": 0}
+        current = float(now if now is not None else time.time())
+        keep, paid, dropped = [], 0, 0
+        for charge in items:
+            try:
+                at = float(charge.get("settle_at") or 0)
+            except (TypeError, ValueError):
+                at = 0.0
+            if at > current:
+                keep.append(charge)
+                continue
+            name = str(charge.get("npc") or "朋友")
+            reason = str(charge.get("reason") or "社交")
+            idem = str(charge.get("idem") or "")
+            cost = max(0, int(charge.get("amount_cents") or 0))
+            if not self._scheduled_still_there(charge):
+                # 她改口不去了：这顿饭不存在，不扣钱，冻结也解开
+                self._release_charge_hold(charge)
+                self._mark_event(charge, {"cancelled": True})
+                dropped += 1
+                continue
+            # 人去了（就算钱没付成，这件事也发生过）
+            self._mark_event(charge, {"occurred": True})
+            if cost <= 0:
+                paid += 1
+                continue
+            cash = max(0, self._cash())
+            pay = cost if cash >= cost else cash
+            if pay <= 0:
+                short = cost
+                try:
+                    self.repo.add_npc_owed(name, short)
+                except Exception as exc:
+                    isolated("social.owed", exc)
+                self._release_charge_hold(charge)
+                self._mark_event(charge, {"paid_cents": 0, "unpaid_cents": short})
+                self._diary("钱不够，这顿是%s先垫的，欠她 %s。" % (name, human_money(short)), name)
+                dropped += 1
+                continue
+            res = await self.finance.expense(pay, reason, idem, category="社交",
+                                             release_hold=str(charge.get("hold_idem") or ""))
+            if isinstance(res, dict) and res.get("ok"):
+                paid += 1
+                if pay < cost:
+                    short = cost - pay
+                    try:
+                        self.repo.add_npc_owed(name, short)
+                    except Exception as exc:
+                        isolated("social.owed", exc)
+                    self._mark_event(charge, {"paid_cents": pay, "unpaid_cents": short})
+                    self._diary("钱不够，先付了 %s，剩下 %s 欠%s的。"
+                                % (human_money(pay), human_money(short), name), name)
+                else:
+                    self._mark_event(charge, {"paid_cents": pay})
+                continue
+            if current > at + self.CHARGE_TTL:
+                dropped += 1
+                self._release_charge_hold(charge)
+                self._diary("本来要请%s的，结果钱不够，这顿最后没付成。" % name, name)
+                continue
+            keep.append(charge)
+        self._save_charges(keep)
+        return {"paid": paid, "pending": len(keep), "dropped": dropped}
+
+    async def recollect_past(self, now=None):
+        """事件真的结束了，才把她事后的回忆写进长期记忆（不再在答应那一刻写未来）。"""
+        current = float(now if now is not None else time.time())
+        done = 0
+        for row in self.repo.events(60) or []:
+            if str(row.get("kind")) != "social:accept":
+                continue
+            payload = row.get("payload") or {}
+            if payload.get("recalled") or payload.get("cancelled") or not payload.get("occurred"):
+                continue
+            day = str(payload.get("day") or row.get("day") or "")
+            end = _ts(day, str(payload.get("end") or ""), 0.0)
+            if not end or end > current:
+                continue
+            name = str(payload.get("npc") or "")
+            note = str(payload.get("note") or "").strip()
+            about = str(payload.get("about_user") or "").strip()
+            text = note
+            if about:
+                text = (text + " " if text else "") + "她还聊起你：" + about
+            try:
+                short = int(payload.get("unpaid_cents") or 0)
+            except (TypeError, ValueError):
+                short = 0
+            if short > 0:
+                text = ((text + " ") if text else "") + "这顿不够的部分是%s先垫的，欠她 %s。" % (
+                    name or "她", human_money(short))
+            if text:
+                await self._memory(self._sentence(text), "evt:recall:" + str(row.get("id")))
+            payload = dict(payload)
+            payload["recalled"] = True
+            try:
+                self.repo.update_event(row.get("id"), payload)
+            except Exception as exc:
+                isolated("social.recall.mark", exc)
+            done += 1
+        return {"recalled": done}
+
     def _pending_for_decision(self, now=None):
         """待回邀约；已处理（resolved）或已过期（expired）的直接清掉，定时器再也扫不到。"""
         inv = self.pending_invite()
@@ -965,7 +1249,9 @@ class SocialEngine:
         kind = str(inv.get("kind") or "")
         label = str(inv.get("topic") or inv.get("label") or "")
         cost = max(0, int(amount_cents or inv.get("amount_cents") or 0))
-        cash = self._cash()
+        # 模型在 accept 时还能改金额：一样要落在硬上限里
+        cost = cap_budget(kind, cost)
+        cash = self._available()
         if cost > cash:
             if kind == "borrow":
                 return {"ok": False, "reason": "insufficient",
@@ -1005,26 +1291,59 @@ class SocialEngine:
         thing = "%s%s" % (name, label or "")
         fact_reason = ("借给%s" % name) if kind == "borrow" else thing
         reason_text = humanize_numbers(npc_roster.sanitize(ledger_line, name)) or fact_reason
-        steps = {}
+        steps: dict[str, object] = {}
         sched = {}
+        # 到点才真的花钱：答应邀约那一刻只占日程（2026-11-20 用户要求：
+        # 「不是决定了 6 点半？为什么现在扣钱？」）。借钱是当场掏现金，仍然立刻扣。
+        now_ts = time.time()
+        settle_at = _ts(day_text, use_start, 0.0) if use_start else 0.0
+        deferred = bool(cost > 0 and kind != "borrow" and settle_at and settle_at > now_ts)
+        # 还没到点的约：日程上写「说好要去」，绝不把她事后的回忆（note）提前挂上去
+        plan_early = plan_line(name, day_text, use_start, label, place or inv.get("place") or "")
+        schedule_detail = plan_early if deferred else str(note or thing)
         if use_start:
             sched = {"day": day_text, "start": use_start, "end": use_end or use_start,
                      "place": place or inv.get("place") or "外面"}
             if not existing:
                 written = bool(self.finance.add_schedule(
-                    day_text, thing, detail=str(note or thing), place=sched["place"],
+                    day_text, thing, detail=schedule_detail, place=sched["place"],
                     category="social", start=use_start, end=sched["end"],
                     zone=str(inv.get("zone") or "")))
                 if not written:
                     return {"ok": False, "reason": "schedule_failed",
                             "message": "日程没写进去，先别答应；再试一次"}
             steps["schedule"] = True
-        res = await self.finance.expense(cost, reason_text, idem, category="社交")
-        if not (isinstance(res, dict) and res.get("ok")):
-            if sched:
-                self._drop_schedule(day_text, use_start, name)
-            return {"ok": False, "reason": "insufficient", "message": "钱没扣成功"}
-        steps["wallet"] = True
+        charge = None
+        if cost <= 0:
+            # 对方请客 / 不收钱：照样占日程、写记忆，但钱包一分不动
+            steps["wallet"] = "free"
+            if use_start and settle_at and settle_at > now_ts:
+                # 0 元也排一条：到点才能把「这事真的发生了」记下来，事后才好写回忆
+                charge = {"idem": idem, "npc": name, "day": day_text, "start": use_start,
+                          "amount_cents": 0, "reason": reason_text, "settle_at": settle_at,
+                          "event_idem": "evt:accept:" + str(inv.get("token") or name)}
+        elif deferred:
+            # 先把这笔钱冻住：余额不变，但到点之前别的花销动不了它（2026-11-20 第七条）
+            hold_idem = "hold:" + idem
+            if not self.finance.hold(cost, reason_text, hold_idem,
+                                     expires_at=settle_at + self.CHARGE_TTL):
+                if sched:
+                    self._drop_schedule(day_text, use_start, name)
+                return {"ok": False, "reason": "insufficient",
+                        "message": "这笔钱已经被别的安排占住了，这顿先别答应"}
+            steps["held"] = True
+            charge = {"idem": idem, "npc": name, "day": day_text, "start": use_start,
+                      "amount_cents": cost, "reason": reason_text, "settle_at": settle_at,
+                      "hold_idem": hold_idem,
+                      "event_idem": "evt:accept:" + str(inv.get("token") or name)}
+            steps["wallet"] = "pending"
+        else:
+            res = await self.finance.expense(cost, reason_text, idem, category="社交")
+            if not (isinstance(res, dict) and res.get("ok")):
+                if sched:
+                    self._drop_schedule(day_text, use_start, name)
+                return {"ok": False, "reason": "insufficient", "message": "钱没扣成功"}
+            steps["wallet"] = True
         if kind == "borrow":
             due = (_dt.date.today() + _dt.timedelta(days=BORROW_DAYS)).isoformat()
             self.repo.add_receivable(name, cost, due)
@@ -1059,6 +1378,7 @@ class SocialEngine:
         # last_event 只写第三人称客观事实：第一人称日记会被下一次 compose 当成她现在的状态
         self.repo.set_npc_event(name, objective_last("social:accept", name, label,
                                                      day_text, use_start))
+        evt_idem = "evt:accept:" + str(inv.get("token") or name)
         self.record("social:accept", name, said, status="accepted", amount_cents=cost,
                     day=day_text,
                     extra={"kind": kind, "place": place_text,
@@ -1066,9 +1386,16 @@ class SocialEngine:
                            "topic": label, "about_user": about,
                            "ledger_line": reason_text, "note": note_text},
                     topic=label, place=place_text, start=use_start, end=use_end,
-                    idem="evt:accept:" + str(inv.get("token") or name))
+                    idem=evt_idem)
+        if charge is not None:
+            try:
+                charge["event_db"] = int(self.repo.event_id_by_idem(evt_idem) or 0)
+            except Exception as exc:
+                isolated("social.charge.event", exc)
+            steps["charge_queued"] = self._queue_charge(charge)
         plan = plan_line(name, day_text, use_start, label, place_text)
-        memory = self._sentence(plan + ((" 她还聊起你：" + about) if about else ""))
+        # 只写「答应了、接下来去」；她自己的事后回忆（note / 她还聊起你）等事件真的结束再写
+        memory = self._sentence(plan)
         steps["memory"] = await self._memory(memory, idem + ":mem")
         steps["diary"] = self._diary(memory, name)
         self.clear_invite()

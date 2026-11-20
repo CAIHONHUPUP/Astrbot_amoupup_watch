@@ -127,6 +127,13 @@ async def finance_tick(plugin):
             from services.social_engine import build_social
         try:
             plugin.social = getattr(plugin, "social", None) or build_social(plugin)
+            try:
+                # 答应时只占日程，到点（事件开始）才真的扣钱；钱不够下一轮重试
+                await plugin.social.settle_charges()
+                # 事件真的结束以后，才把她事后的回忆写进长期记忆
+                await plugin.social.recollect_past()
+            except Exception as exc:
+                isolated("finance.social_settle", exc)
             social_out = await plugin.social.scheduled(_dt.datetime.now())
             # 只推她自己说出口的那句（LLM 生成的 note）；系统事实不直接当她的消息发出去
             for text in (social_out or {}).get("push", []):

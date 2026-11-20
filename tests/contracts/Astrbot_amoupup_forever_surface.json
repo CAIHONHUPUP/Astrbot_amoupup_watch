@@ -64,6 +64,7 @@
     "item_name",
     "reason",
     "ref",
+    "release_hold",
     "sub_category",
     "trigger_reason"
   ],

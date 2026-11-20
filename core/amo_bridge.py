@@ -454,6 +454,60 @@ class FinanceLink:
             isolated("finance.withdrawable", exc)
             return None
 
+    def held_cents(self):
+        """被冻结的钱（答应饭局到点才扣的那笔）。旧钱包没有 hold 就当 0。"""
+        amo = self._amo()
+        if amo is None:
+            return 0
+        try:
+            fn = getattr(amo.wallet, "held", None)
+            return int(fn()) if callable(fn) else 0
+        except Exception as exc:
+            isolated("finance.held", exc)
+            return 0
+
+    def available_cents(self):
+        """可花余额 = 余额 - 冻结；旧钱包退化成余额。"""
+        amo = self._amo()
+        if amo is None:
+            return None
+        try:
+            fn = getattr(amo.wallet, "available", None)
+            if callable(fn):
+                return int(fn())
+            return int(amo.wallet.balance())
+        except Exception as exc:
+            isolated("finance.available", exc)
+            return None
+
+    def hold(self, amount_cents, reason, idem, expires_at=0.0):
+        """冻结一笔钱（余额不变，别的扣款动不了）；返回是否冻住。"""
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            fn = getattr(amo.wallet, "hold", None)
+            if not callable(fn):
+                return False
+            return bool(fn(int(amount_cents), str(reason or ""), str(idem),
+                           expires_at=float(expires_at or 0)))
+        except Exception as exc:
+            isolated("finance.hold", exc)
+            return False
+
+    def release_hold(self, idem):
+        amo = self._amo()
+        if amo is None:
+            return False
+        try:
+            fn = getattr(amo.wallet, "release", None)
+            if not callable(fn):
+                return False
+            return bool(fn(str(idem or "")))
+        except Exception as exc:
+            isolated("finance.release_hold", exc)
+            return False
+
     def ledger(self, limit=200):
         """只读流水：面板生活账单要按原因分类，读 amo 公开的 wallet.ledger()，不碰表。"""
         amo = self._amo()
@@ -627,8 +681,25 @@ class FinanceLink:
 
     def _small_diary(self, amo, text):
         try:
-            amo.db.save_diary(time.strftime("%Y-%m-%d"), time.strftime("%H"),
-                              self._diary_fallback(text))
+            day, hour = time.strftime("%Y-%m-%d"), time.strftime("%H")
+            text = self._diary_fallback(text)
+            merged = text
+            getter = getattr(getattr(amo, "db", None), "get_diary", None)
+            old = ""
+            if callable(getter):
+                try:
+                    old = str(getter(day, hour) or "").strip()
+                except Exception as exc:
+                    logger.debug("[WATCH] optional step failed: %r", exc)
+            if old and old != text:
+                # 同一小时多条流水：合成一句，别让最后一条把前面的人话顶掉
+                if text in old:
+                    merged = old
+                elif len(old) + len(text) + 1 <= 240:
+                    merged = old.rstrip("。；; ") + "；" + text
+                else:
+                    merged = old
+            amo.db.save_diary(day, hour, merged)
             return True
         except Exception as exc:
             isolated("finance.small_diary", exc)
@@ -711,8 +782,12 @@ class FinanceLink:
         return "其他", "日常", text, text
 
     async def expense(self, amount_cents, reason, idem, necessary=False, quiet=False,
-                      category="", sub_category="", item_name="", trigger_reason="", diary=True):
-        """quiet=True：日常逐笔消费——只写小日记，不进长期记忆（日终按分类汇总再记）。"""
+                      category="", sub_category="", item_name="", trigger_reason="", diary=True,
+                      release_hold=""):
+        """quiet=True：日常逐笔消费——只写小日记，不进长期记忆（日终按分类汇总再记）。
+
+        release_hold：这笔钱冻结过（答应饭局那笔），扣款时原子解冻再扣。
+        """
         amo = self._amo()
         if amo is None:
             return {"ok": False, "reason": "amo 未就绪", "steps": {}}
@@ -723,10 +798,12 @@ class FinanceLink:
             cat, sub, item, trigger = self._expense_meta(reason)
             # 写库只存纯原因/物品名：严禁再拼「餐饮：/日常：/其他：」这类前缀（2026-11-15 用户要求）
             stored_reason = str(item or reason or "日常").strip()
+            debit_kwargs = dict(category=category or cat, sub_category=sub_category or sub,
+                                item_name=item_name or item, trigger_reason=trigger_reason or trigger)
+            if release_hold:
+                debit_kwargs["release_hold"] = str(release_hold)
             steps["wallet"] = bool(amo.wallet.debit(
-                int(amount_cents), stored_reason, idem,
-                category=category or cat, sub_category=sub_category or sub,
-                item_name=item_name or item, trigger_reason=trigger_reason or trigger))
+                int(amount_cents), stored_reason, idem, **debit_kwargs))
         except Exception as exc:
             isolated("finance.expense.wallet", exc)
             steps["wallet"] = False
@@ -745,8 +822,8 @@ class FinanceLink:
         level = expense_level(int(amount_cents), necessary=necessary)
         steps["mood"] = self._nudge(amo, idem, level["deltas"]) if level["deltas"] else True
         after = self.mood()["word"]
-        text = facts.ledger_fact("支出", int(amount_cents), int(self.balance_cents() or 0),
-                                 item=stored_reason or reason)
+        # 小日记/长期记忆只留一句人话：不抄账本格式、不带余额（余额会过期，2026-11-20 用户要求）
+        text = facts.spend_line(int(amount_cents), item=stored_reason or reason)
         if necessary:
             steps["schedule"] = self._schedule(amo, "支出", int(amount_cents),
                                                note=str(reason or ""))

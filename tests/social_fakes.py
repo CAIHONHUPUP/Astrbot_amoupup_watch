@@ -96,6 +96,27 @@ class FakeRepo:
     def events(self, limit=10):
         return list(reversed(self.log))[:max(1, int(limit or 10))]
 
+    def event_id_by_idem(self, idem):
+        for row in self.log:
+            if str(row.get("idem") or "") == str(idem or ""):
+                return int(row["id"])
+        return 0
+
+    def update_event(self, event_id, payload):
+        for row in self.log:
+            if int(row["id"]) == int(event_id):
+                row["payload"] = dict(payload)
+                return True
+        return False
+
+    def add_npc_owed(self, name, delta_cents):
+        row = self.npc.setdefault(name, {"name": name, "circle": "", "relation": "",
+                                         "affinity": 50, "tags": "", "borrowed_from_her": 0,
+                                         "money_owed": 0, "last_event": "", "status": "",
+                                         "status_at": 0.0})
+        row["money_owed"] = int(row.get("money_owed") or 0) + int(delta_cents)
+        return True
+
 
 class FakeFinance:
     def __init__(self, cash=500000, fatigue=42, amo=None):
@@ -113,6 +134,8 @@ class FakeFinance:
         self.schedules = []
         self.actions = []
         self.windows = {}
+        self.held = 0
+        self.holds = {}
 
     def mood(self):
         return {"word": "平静", "score": 50}
@@ -142,11 +165,38 @@ class FakeFinance:
     def balance_cents(self):
         return self.cash
 
+    # 冻结（答应饭局到点才扣的那笔）
+    def available_cents(self):
+        return self.cash - self.held
+
+    def held_cents(self):
+        return self.held
+
+    def hold(self, amount_cents, reason, idem, expires_at=0.0):
+        amount = int(amount_cents)
+        key = str(idem or "")
+        if key in self.holds:
+            return True
+        if amount <= 0 or amount > self.cash - self.held:
+            return False
+        self.holds[key] = amount
+        self.held += amount
+        return True
+
+    def release_hold(self, idem):
+        amount = self.holds.pop(str(idem or ""), 0)
+        if amount:
+            self.held -= amount
+        return bool(amount)
+
     def fatigue(self):
         return self.fatigue_value
 
     async def expense(self, amount_cents, reason, idem, **kwargs):
         amount_cents = int(amount_cents)
+        hold_idem = str(kwargs.pop("release_hold", "") or "")
+        if hold_idem:
+            self.release_hold(hold_idem)
         if amount_cents > self.cash:
             return {"ok": False, "reason": "余额不足"}
         self.cash -= amount_cents

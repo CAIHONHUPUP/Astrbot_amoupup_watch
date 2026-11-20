@@ -44,13 +44,17 @@ def test_invite_is_fact_only():
     assert eng.pending_invite()["token"] == inv["token"]
 
 
-def test_accept_settles_whole_chain():
+def test_accept_keeps_money_until_event_starts():
     eng, repo, fin = _engine()
     invite = asyncio.run(eng.create_invite(now=SAT, composer=_composer()))["invite"]
     note = "答应了如烟，下午一起去商场逛逛"
     res = asyncio.run(eng.accept_invite(note=note))
     assert res["ok"]
-    assert fin.cash == 500000 - invite["amount_cents"]
+    # 2026-11-20 用户要求：答应那一刻只占日程，到点（事件开始）才真的扣钱
+    assert fin.cash == 500000 and fin.expenses == []
+    assert res["steps"]["wallet"] == "pending"
+    assert [c["idem"] for c in eng.pending_charges()] == [
+        "social_event:柳如烟:2026-11-21:14:00"]
     assert fin.schedules[0]["start"] == "14:00" and fin.schedules[0]["end"] == "17:00"
     assert fin.moods[0]["开心"] > 0 and fin.moods[0]["疲惫"] < 0
     assert fin.memories and fin.diaries
@@ -58,7 +62,12 @@ def test_accept_settles_whole_chain():
     assert repo.npc["柳如烟"]["last_event"].startswith("她答应了柳如烟")
     assert "我" not in repo.npc["柳如烟"]["last_event"]
     assert eng.pending_invite() is None
-    assert res["steps"]["wallet"] and res["steps"]["schedule"]
+    assert res["steps"]["schedule"]
+    # 14:00 到点才结算，且和事件共用同一个幂等键
+    out = asyncio.run(eng.settle_charges(now=dt.datetime(2026, 11, 21, 14, 0, 0).timestamp()))
+    assert out["paid"] == 1 and eng.pending_charges() == []
+    assert fin.cash == 500000 - invite["amount_cents"]
+    assert fin.expenses[0]["idem"] == "social_event:柳如烟:2026-11-21:14:00"
 
 
 def test_short_money_cannot_be_accepted():
@@ -186,7 +195,7 @@ def test_scheduled_full_chain_with_composer_and_decider():
     out = asyncio.run(eng.scheduled(now=SAT, decider=decider, composer=_composer()))
     assert out["invite"] and out["decision"] and out["decision"]["ok"]
     assert "余额" in seen["facts"] and "疲惫值" in seen["facts"]
-    assert fin.cash < 500000 and fin.schedules
+    assert fin.schedules and eng.pending_charges() and fin.cash == 500000
     assert out["push"] == ["好呀，下午商场见"]
 
 
@@ -207,8 +216,9 @@ def test_tools_accept_and_reject():
     plugin = SimpleNamespace(social=eng)
     asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
     msg = asyncio.run(llm_tools.accept_social_event_tool(plugin, note="和柳如烟去逛街了"))
-    assert "结算" in msg
-    assert fin.expenses and eng.pending_invite() is None
+    assert "要等到" in msg and "现在先别说" in msg
+    assert fin.expenses == [] and eng.pending_charges()
+    assert eng.pending_invite() is None
 
 
 def test_red_packet_records():

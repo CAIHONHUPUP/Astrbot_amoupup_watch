@@ -183,7 +183,7 @@
 
     <div class="tiles">
       <div class="tile hero-tile"><div class="k">总资产</div><div class="v" id="f-total">¥—</div><div class="s">余额 + 持仓 + 房产车产 − 负债</div></div>
-      <div class="tile"><div class="k">可用余额</div><div class="v" id="f-cash">¥—</div><div class="s">amo 记账 · 只读</div></div>
+      <div class="tile"><div class="k">可用余额</div><div class="v" id="f-cash">¥—</div><div class="s" id="f-hold">amo 记账 · 只读</div></div>
       <div class="tile"><div class="k">持仓市值</div><div class="v" id="f-mv">¥—</div><div class="s" id="f-mv-s">股票 + 基金</div></div>
       <div class="tile"><div class="k">今日盈亏</div><div class="v" id="f-pnl">—</div><div class="s" id="f-pnl-s">15:00 收盘更新</div></div>
     </div>
@@ -471,6 +471,12 @@
     var w = d.wallet || {};
     q("f-total").textContent = money(w.total);
     q("f-cash").textContent = money(w.available);
+    var held = Number(w.held || 0);
+    if (q("f-hold")) {
+      q("f-hold").textContent = held > 0
+        ? ("amo 记账 · 冻结 " + money(held))
+        : "amo 记账 · 只读";
+    }
     q("f-mv").textContent = money(w.market_value);
     var pnl = Number(w.today_pnl || 0);
     var pnlEl = q("f-pnl");
@@ -907,9 +913,15 @@
       // 翻不出人话的动态宁可不显示，也绝不把代码变量名放上屏幕
       if (!text) return;
       var who = p.npc || label(e.kind);
+      // 未来的约显示「约定时间」，答应/收到的时间另起一句，别让两个面板两个时间
+      var whenText = String(e.when_text || when || "");
+      var createdAt = String(e.created_text || when || "");
+      var saidAt = (createdAt && createdAt !== whenText)
+        ? (" · " + (String(e.kind || "").indexOf("accept") >= 0 ? "答应于 " : "收到于 ") + createdAt)
+        : "";
       items.push('<div class="item"><div class="k">' + esc(who) + '</div>'
         + '<div class="v" style="font-size:13px;font-weight:500">' + esc(text) + '</div>'
-        + '<div class="s">' + esc(when) + '</div>'
+        + '<div class="s">' + esc(whenText + saidAt) + '</div>'
         + ((p.day && p.start) ? ('<div class="s">对应日程：' + esc(p.day) + ' '
           + esc(p.start) + '-' + esc(p.end || "") + ' ' + esc(p.topic || "") + '</div>') : '')
         + '</div>');

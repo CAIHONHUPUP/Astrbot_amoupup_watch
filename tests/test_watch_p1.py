@@ -417,6 +417,11 @@ def test_collision_reschedule_keeps_one_idem():
     res = asyncio.run(eng.accept_invite(note="好呀"))
     assert res["ok"] is True
     assert res["schedule"]["day"] == "2026-11-22"
+    # 答应时不扣钱；到改期后的 14:00 才扣，幂等键仍按原始邀约日子算
+    assert fin.expenses == [] and eng.pending_charges()
+    assert str(eng.pending_charges()[0]["idem"]).startswith(
+        "social_event:柳如烟:2026-11-21:14:00")
+    asyncio.run(eng.settle_charges(now=dt.datetime(2026, 11, 22, 14, 0, 0).timestamp()))
     assert fin.expenses and fin.expenses[0]["idem"].startswith(
         "social_event:柳如烟:2026-11-21:14:00")
 

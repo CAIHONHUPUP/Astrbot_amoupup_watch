@@ -26,6 +26,16 @@ def ledger_fact(kind, amount_cents, balance_cents, item="", when_ts=None) -> str
     return "%s%s，余额 %s 元" % (head, detail, money(balance_cents))
 
 
+def spend_line(amount_cents, item="") -> str:
+    """一句人话的消费（进小日记/长期记忆用）。
+
+    不写时间戳、不写余额：余额会过期，账本明细在 wallet_ledger 里，不往记忆里抄。
+    """
+    item = str(item or "").strip()
+    head = (item + "，") if item else ""
+    return "%s花了 %s 元。" % (head, money(amount_cents))
+
+
 def salary_fact(base_cents, bonus_cents, deduction_cents, net_cents, balance_cents,
                 when_ts=None) -> str:
     parts = ["基本 " + money(base_cents) + " 元"]

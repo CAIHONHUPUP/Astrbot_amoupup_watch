@@ -337,7 +337,7 @@ class FinanceRepo:
     def events(self, limit=10):
         """最近 N 条社交事件（新的在前），payload 已解析成 dict。"""
         rows = self._rows(
-            "SELECT id, day, kind, weight, payload, created_at FROM events "
+            "SELECT id, day, kind, weight, payload, created_at, idem FROM events "
             "WHERE gen='social' ORDER BY id DESC LIMIT ?", (max(1, int(limit or 10)),))
         out = []
         for row in rows:
@@ -348,6 +348,32 @@ class FinanceRepo:
             row["payload"] = payload if isinstance(payload, dict) else {}
             out.append(row)
         return out
+
+    def event_id_by_idem(self, idem):
+        if not idem:
+            return 0
+        rows = self._rows("SELECT id FROM events WHERE idem=? LIMIT 1", (str(idem),))
+        return int(rows[0]["id"]) if rows else 0
+
+    def update_event(self, event_id, payload):
+        """改一条事件的 payload（赴约/取消/已回忆这些状态标记用）。"""
+        if not event_id or not isinstance(payload, dict):
+            return False
+        try:
+            return self.store.write(
+                "UPDATE events SET payload=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False), int(event_id)))
+        except Exception:
+            return False
+
+    def add_npc_owed(self, name, delta_cents):
+        """她欠 NPC 的钱（饭钱不够、对方先垫）。"""
+        try:
+            return self.store.write(
+                "UPDATE npc_relations SET money_owed = money_owed + ?, updated_at=? WHERE name=?",
+                (int(delta_cents), time.time(), str(name)))
+        except Exception:
+            return False
 
     def prune_npcs(self, keep):
         """物理锁死名单：只保留 7 个核心 NPC，别处混进来的名字直接清掉。"""

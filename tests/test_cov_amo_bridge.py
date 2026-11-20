@@ -100,9 +100,14 @@ class State:
 class DB:
     def __init__(self):
         self.diaries = []
+        self.rows = {}
 
     def save_diary(self, day, hour, text):
         self.diaries.append((day, hour, text))
+        self.rows[(day, hour)] = text
+
+    def get_diary(self, day, hour):
+        return self.rows.get((day, hour), "")
 
 
 class Amo:
@@ -978,6 +983,26 @@ def test_expense_branches():
 
     out = run(link.expense(300, "奶茶", "e3", quiet=True))
     assert "memory" not in out["steps"]
+
+
+def test_expense_memory_and_diary_are_human_sentences():
+    """2026-11-20：账本格式（时间戳+余额）不许抄进长期记忆和小日记，余额会过期。"""
+    amo = Amo()
+    link = make_link(amo)
+    run(link.expense(500, "地铁 × 1", "e-human"))
+    assert amo.memories and "余额" not in amo.memories[-1][2]
+    assert "地铁" in amo.memories[-1][2] and "花了" in amo.memories[-1][2]
+    assert amo.db.diaries and "余额" not in amo.db.diaries[-1][2]
+    assert "支出 " not in amo.db.diaries[-1][2]
+
+
+def test_small_diary_merges_same_hour_instead_of_overwriting():
+    amo = Amo()
+    link = make_link(amo)
+    run(link.expense(500, "地铁 × 1", "e-m1", quiet=True))
+    run(link.expense(1500, "面条 × 1", "e-m2", quiet=True))
+    text = amo.db.diaries[-1][2]
+    assert "地铁" in text and "面条" in text
 
 
 def test_expense_failures():

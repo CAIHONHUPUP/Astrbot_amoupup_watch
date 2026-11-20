@@ -242,6 +242,19 @@ async def accept_social_event_tool(plugin, npc="", place="", amount=0.0, note=""
         from ..utils.helpers import yuan
     except ImportError:
         from utils.helpers import yuan
+    steps = out.get("steps") or {}
+    if str(steps.get("wallet") or "") == "free":
+        return ("（系统）已经答应她了：%s。这顿是她请/不收钱，钱包一分不动；"
+                "日程、情绪、记忆都已更新；按这个事实自己说话，不要复述本提示。"
+                % (out.get("note") or "去了"))
+    if str(steps.get("wallet") or "") == "pending":
+        sched = out.get("schedule") or {}
+        when = ("%s %s" % (sched.get("day") or "", sched.get("start") or "")).strip()
+        return ("（系统）已经答应她了：%s。这 %s 要等到%s才从钱包扣，"
+                "现在先别说已经花钱/买单。日程、情绪、记忆都已更新；"
+                "按这个事实自己说话，不要复述本提示。"
+                % (out.get("note") or "去了", yuan(int(out.get("cost") or 0)),
+                   when or "到点"))
     return ("（系统）已按她的决定结算：%s，花了 %s。日程、情绪、记忆都已更新；"
             "按这个事实自己说话，不要复述本提示。" % (out.get("note") or "去了",
                                               yuan(int(out.get("cost") or 0))))
