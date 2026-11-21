@@ -104,6 +104,9 @@ async def tick(plugin, now=None):
         try:
             facts = "在商场试了一件%s%s，价格 %d 元，卡里余额 %d 元" % (
                 color, name, buy // 100, cash // 100)
+            if hasattr(amo, "note_recent_topic"):
+                # 即使这次推送没发出去，他追问「差多少」也能接住
+                amo.note_recent_topic(facts, now.timestamp() + 2 * 3600)
             style = "钱不够，想让他赞助一点" if cash < buy else "很喜欢，想问能不能买"
             line = ""
             try:
@@ -113,6 +116,9 @@ async def tick(plugin, now=None):
                 isolated("shopping_engine.phrase", exc)
             if line:
                 await amo.push_to_owner(line)
+                if hasattr(amo, "note_recent_topic"):
+                    amo.note_recent_topic(facts + "；你刚跟他说：" + line,
+                                          now.timestamp() + 2 * 3600)
             if hasattr(amo, "note_shopping_pending"):
                 # 把价格/余额一起给她：他追问「差多少」时能直接算，不用猜
                 amo.note_shopping_pending(

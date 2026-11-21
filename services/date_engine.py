@@ -666,6 +666,13 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
     if random.random() < 0.3:
         incident = random.choice(DATE_INCIDENTS)
         bridge.call("set_date_incident", incident, end.timestamp())
+        try:
+            _amo_obj = bridge.resolve()
+            if hasattr(_amo_obj, "note_recent_topic"):
+                _amo_obj.note_recent_topic(
+                    "约会中：%s" % incident, (end.timestamp() + 2 * 3600))
+        except Exception as exc:
+            isolated("date_engine.incident_topic", exc)
         line = ""
         try:
             from . import social_ai as _social_ai
@@ -675,6 +682,14 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
         except Exception as exc:
             isolated("date_engine.incident_phrase", exc)
         if line:
+            try:
+                _amo_obj = bridge.resolve()
+                if hasattr(_amo_obj, "note_recent_topic"):
+                    _amo_obj.note_recent_topic(
+                        "约会中：%s；你刚跟他说：%s" % (incident, line),
+                        (end.timestamp() + 2 * 3600))
+            except Exception as exc:
+                isolated("date_engine.incident_topic_line", exc)
             gate = getattr(bridge.resolve(), "request_push", None)
             if callable(gate):
                 await gate(line, "date_incident")
