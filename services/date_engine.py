@@ -964,8 +964,12 @@ async def finish_date(plugin, now=None, reason="timeout"):
         try:
             session = bridge.call("date_session").value or {}
             phase = str((session or {}).get("phase") or "")
-            if phase and phase not in ("active", "paused", "home"):
+            if phase and phase not in ("none", "active", "paused", "home"):
                 _set_active(plugin, {})
+                try:
+                    _clear_ghost_state(bridge)
+                except Exception as exc:
+                    isolated("date_engine.finish_date.ghost", exc)
                 return {"ok": True, "duplicate": True, "reason": "already_closed"}
         except Exception as exc:
             isolated("date_engine.finish_date.session", exc)

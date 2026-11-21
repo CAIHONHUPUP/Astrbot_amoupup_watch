@@ -42,7 +42,7 @@ def _engine(cash=500000):
 def test_accept_memory_is_plan_only():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="今天累归累，还是跟如烟吃了火锅",
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="今天累归累，还是跟如烟吃了火锅",
                                   about_user="我说他最近还是老样子"))
     assert fin.memories and "答应了柳如烟" in fin.memories[0]
     assert "聊起你" not in fin.memories[0] and "吃了" not in fin.memories[0]
@@ -51,7 +51,7 @@ def test_accept_memory_is_plan_only():
 def test_recall_after_event_end_writes_memory_once():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="还是跟如烟吃了火锅",
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="还是跟如烟吃了火锅",
                                   about_user="我说他最近还是老样子"))
     asyncio.run(eng.settle_charges(now=START))
     before = len(fin.memories)
@@ -65,7 +65,7 @@ def test_recall_after_event_end_writes_memory_once():
 def test_cancelled_event_never_recalled():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     fin.schedules = []
     fin.windows[DAY] = [{"start": "14:00", "end": "17:00", "activity": "在家躺着"}]
     asyncio.run(eng.settle_charges(now=START))
@@ -109,7 +109,7 @@ def test_treat_words_make_it_free():
     out = asyncio.run(eng.create_invite(now=dt.datetime(2026, 11, 21, 10, 0),
                                         composer=composer))
     assert out["ok"] and out["invite"]["amount_cents"] == 0
-    res = asyncio.run(eng.accept_invite(note="好呀"))
+    res = asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     assert res["ok"] and res["steps"]["wallet"] == "free"
     assert fin.expenses == [] and fin.cash == 500000
     # 0 元也排一条，只为到点标记「真的去了」

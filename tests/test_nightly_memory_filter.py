@@ -21,8 +21,9 @@ class NightlyFilterTests(unittest.TestCase):
         ]
         self.assertEqual([3], [row["id"] for row in _watch_rows(rows)])
 
-    def test_unknown_kind_skipped(self):
-        self.assertEqual([], _watch_rows([{"id": 1, "kind": ""}, {"id": 2}]))
+    def test_unknown_kind_kept_but_diary_skipped(self):
+        rows = [{"id": 1, "kind": ""}, {"id": 2, "kind": "diary"}]
+        self.assertEqual([1], [row["id"] for row in _watch_rows(rows)])
 
 
 if __name__ == "__main__":

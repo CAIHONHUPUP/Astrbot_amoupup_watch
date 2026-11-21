@@ -210,7 +210,10 @@ async def confirm_arrival_tool(plugin, activity_name="", now=None):
     pending = find_pending(plugin, activity_name)
     if pending is None:
         return "现在没有在等你赴约呀。"
-    out = await attend_date(plugin, pending.get("title"), now=now)
+    try:
+        out = await attend_date(plugin, pending.get("title"), now=now)
+    except TypeError:  # 老测试替身/老签名不接受 now
+        out = await attend_date(plugin, pending.get("title"))
     if not out.get("ok"):
         return out.get("message") or "约会没开始成……"
     return ("（系统）约会已经开始，状态已切到 dating。"

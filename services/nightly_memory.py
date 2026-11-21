@@ -33,7 +33,9 @@ def _watch_rows(rows):
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        if str(row.get("kind") or "") in _WATCH_KINDS:
+        kind = str(row.get("kind") or "")
+        # 空 kind 是旧版守护写的，仍归守护；companion 的 activity/diary 绝不能归档
+        if not kind or kind in _WATCH_KINDS:
             out.append(row)
     return out
 MAX_GROUPS = 4

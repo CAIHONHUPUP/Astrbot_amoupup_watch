@@ -38,7 +38,7 @@ def _engine(cash=500000):
 def test_accept_does_not_charge_until_event_starts():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    res = asyncio.run(eng.accept_invite(note="好呀，下班见"))
+    res = asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀，下班见"))
     assert res["ok"] and res["steps"]["wallet"] == "pending"
     assert fin.expenses == [] and fin.cash == 500000
     assert [c["idem"] for c in eng.pending_charges()] == [IDEM]
@@ -47,7 +47,7 @@ def test_accept_does_not_charge_until_event_starts():
 def test_settle_before_start_keeps_money():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     out = asyncio.run(eng.settle_charges(now=START - 60))
     assert out["paid"] == 0 and out["pending"] == 1
     assert fin.expenses == [] and len(eng.pending_charges()) == 1
@@ -56,7 +56,7 @@ def test_settle_before_start_keeps_money():
 def test_settle_at_start_charges_once_with_event_idem():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     out = asyncio.run(eng.settle_charges(now=START))
     assert out["paid"] == 1 and out["pending"] == 0
     assert fin.cash == 500000 - 20000
@@ -69,7 +69,7 @@ def test_settle_at_start_charges_once_with_event_idem():
 def test_settle_skips_when_plan_was_cancelled():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     fin.windows[DAY] = [{"start": "14:00", "end": "17:00", "activity": "在家躺着"}]
     fin.schedules = []                   # 她改口不去了，原来的约会块也没了
     out = asyncio.run(eng.settle_charges(now=START))
@@ -80,7 +80,7 @@ def test_accept_freezes_the_money():
     """第七条：答应时把钱冻住——余额不变，但别的花销动不了。"""
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     assert fin.cash == 500000 and fin.expenses == []
     assert fin.held == 20000
     assert fin.holds.get("hold:social_event:柳如烟:2026-11-21:14:00") == 20000
@@ -92,7 +92,7 @@ def test_accept_freezes_the_money():
 def test_settle_consumes_and_releases_the_hold():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     asyncio.run(eng.settle_charges(now=START))
     assert fin.held == 0 and fin.holds == {}
     assert fin.cash == 480000
@@ -102,7 +102,7 @@ def test_settle_consumes_and_releases_the_hold():
 def test_cancel_releases_the_hold():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     fin.schedules = []
     fin.windows[DAY] = [{"start": "14:00", "end": "17:00", "activity": "在家躺着"}]
     asyncio.run(eng.settle_charges(now=START))
@@ -114,7 +114,7 @@ def test_accept_rejects_when_money_already_held():
     eng, repo, fin = _engine()
     fin.held = 499000          # 只剩 1000 可花
     eng.set_invite(_invite())
-    res = asyncio.run(eng.accept_invite(note="好呀"))
+    res = asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     assert res["ok"] is False and res["reason"] == "insufficient"
     assert fin.schedules == [] and eng.pending_charges() == []
 
@@ -122,7 +122,7 @@ def test_accept_rejects_when_money_already_held():
 def test_short_money_pays_what_it_can_and_owes_the_rest():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     fin.cash = 1000                      # 到点时钱已经花掉了
     out = asyncio.run(eng.settle_charges(now=START))
     assert out["paid"] == 1 and out["pending"] == 0
@@ -138,7 +138,7 @@ def test_short_money_pays_what_it_can_and_owes_the_rest():
 def test_short_money_with_empty_wallet_records_debt_only():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     fin.cash = 0
     out = asyncio.run(eng.settle_charges(now=START))
     assert out["paid"] == 0 and out["dropped"] == 1 and fin.expenses == []
@@ -149,7 +149,7 @@ def test_short_money_with_empty_wallet_records_debt_only():
 def test_borrow_is_still_paid_on_the_spot():
     eng, repo, fin = _engine()
     eng.set_invite(_invite(kind="borrow", topic="借钱周转", amount_cents=30000))
-    res = asyncio.run(eng.accept_invite(note="先拿着用"))
+    res = asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="先拿着用"))
     assert res["ok"] and res["steps"]["wallet"] is True
     assert fin.cash == 500000 - 30000 and eng.pending_charges() == []
 
@@ -171,7 +171,7 @@ def test_deferred_accept_writes_future_tense_schedule_detail():
     """未来的约：日程里只能写「说好要去」，不能先挂上她事后的回忆。"""
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="今天累归累，还是跟如烟吃了火锅"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="今天累归累，还是跟如烟吃了火锅"))
     detail = str(fin.schedules[0]["detail"])
     assert "吃了" not in detail and detail.startswith("答应了柳如烟")
 
@@ -179,6 +179,6 @@ def test_deferred_accept_writes_future_tense_schedule_detail():
 def test_record_stores_day_in_payload():
     eng, repo, fin = _engine()
     eng.set_invite(_invite())
-    asyncio.run(eng.accept_invite(note="好呀"))
+    asyncio.run(eng.accept_invite(now=dt.datetime(2026, 11, 21, 10, 0), note="好呀"))
     evt = [r for r in repo.log if r["kind"] == "social:accept"][-1]
     assert evt["payload"]["day"] == DAY
