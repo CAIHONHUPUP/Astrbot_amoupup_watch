@@ -110,6 +110,10 @@ class ShoppingTests(unittest.TestCase):
         self.assertIn("这件挺好看的，我能买吗", plugin.amo.pushed)
         self.assertIn("价格", plugin.amo.pending_line)
         self.assertIn("余额", plugin.amo.pending_line)
+        import json as _json
+        events = _json.loads(plugin.finance_repo.meta_get("shop:events") or "[]")
+        self.assertTrue(events and int(events[0].get("price") or 0) > 100,
+                        "event price 必须是分，不是元")
         self.assertIn("余额", plugin.amo.topic_line)
 
     def test_middle_buys_cheap(self):

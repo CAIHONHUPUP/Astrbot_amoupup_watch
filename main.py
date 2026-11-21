@@ -445,10 +445,6 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             from services.city import relocate
         moved = await relocate(self, name)
         yield event.plain_result(city_reply(self, moved, saved))
-    @_optional_hook("command")("搬家")
-    async def move_cmd(self, event: AstrMessageEvent, name: str = ""):
-        async for item in self.city_cmd(event, name):
-            yield item
     @_optional_hook("command")("设定城市")
     async def set_city_cmd(self, event: AstrMessageEvent, name: str = ""):
         """「设定城市 杭州」的同义指令。"""

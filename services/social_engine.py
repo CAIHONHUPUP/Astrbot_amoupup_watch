@@ -949,7 +949,8 @@ class SocialEngine:
             budget = KIND_BUDGET.get(kind, 10000)
         budget = cap_budget(kind, budget)
         topic_text = align_topic_place(str(data.get("topic") or "").strip()[:20], place)
-        ask = _retime_ask(str(data.get("ask") or ""), target, now, start)
+        ask = align_topic_place(str(data.get("ask") or ""), place)
+        ask = _retime_ask(ask, target, now, start)
         wrong_name = str(data.get("npc") or "").strip()
         if wrong_name and wrong_name != npc:
             ask = ask.replace(wrong_name, npc)

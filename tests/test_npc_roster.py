@@ -107,3 +107,9 @@ def test_sanitize_partial_name_does_not_eat_verb():
 def test_sanitize_complete_name_can_be_replaced():
     out = npc_roster.sanitize("今天，王姐约我吃饭。", "柳如烟")
     assert "柳如烟" in out and "王姐" not in out
+
+
+def test_sanitize_keeps_verb_when_replacing():
+    out = npc_roster.sanitize("王姐请我吃饭", "柳如烟")
+    assert "柳如烟" in out and "王姐" not in out
+    assert "请我吃饭" in out

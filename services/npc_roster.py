@@ -190,6 +190,9 @@ def sanitize(text, npc=""):
             r"(?:^|[，。！？、：；\s\"“”]|(?:和|跟|与|给|陪|请|被|让|叫|找|对|向))"
             r"%s(?=$|[，。！？、：；\s\"“”]|(?:%s))" % (re.escape(token), _VERBS_EXT),
             value)
+        if not bounded:
+            # 边界不匹配（如「昨天王姐请我」）也替换，但保留替换后的新人名检查
+            bounded = True
         if bounded:
             fixed = value.replace(token, npc, 1)
             # 替换后「柳如烟拉/柳如烟约」还会被当成新人名，排除以 npc 开头的命中

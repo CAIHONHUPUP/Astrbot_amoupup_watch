@@ -18,8 +18,9 @@ class NightlyFilterTests(unittest.TestCase):
             {"id": 1, "kind": "activity", "content": "在咖啡店"},
             {"id": 2, "kind": "diary", "content": "长日记"},
             {"id": 3, "kind": "finance", "content": "今天花了 30"},
+            {"id": 4, "kind": "finance_long_expense", "content": "长期事实"},
         ]
-        self.assertEqual([3], [row["id"] for row in _watch_rows(rows)])
+        self.assertEqual([3, 4], [row["id"] for row in _watch_rows(rows)])
 
     def test_unknown_kind_kept_but_diary_skipped(self):
         rows = [{"id": 1, "kind": ""}, {"id": 2, "kind": "diary"}]

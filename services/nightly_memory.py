@@ -34,8 +34,10 @@ def _watch_rows(rows):
         if not isinstance(row, dict):
             continue
         kind = str(row.get("kind") or "")
-        # 空 kind 是旧版守护写的，仍归守护；companion 的 activity/diary 绝不能归档
-        if not kind or kind in _WATCH_KINDS:
+        if kind in ("activity", "diary", "life", "daily", "chat"):
+            continue
+        # 守护实际写的是 finance_long/finance_short/...，按前缀认；空 kind 是旧版守护
+        if not kind or kind.startswith("finance") or kind in _WATCH_KINDS:
             out.append(row)
     return out
 MAX_GROUPS = 4

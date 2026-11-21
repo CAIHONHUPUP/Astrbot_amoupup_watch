@@ -93,7 +93,7 @@ async def tick(plugin, now=None):
     if buy:
         buy = max(500, int(buy * factor))
         item = {"name": name, "color": color, "category": cat,
-                "time_slot": slot, "price": buy // 100}
+                "time_slot": slot, "price": buy}
         try:
             repo.meta_set("shop:pending", json.dumps({
                 "name": name, "color": color, "category": cat, "time_slot": slot,
