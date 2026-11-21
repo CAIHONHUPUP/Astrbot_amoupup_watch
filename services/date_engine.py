@@ -958,8 +958,18 @@ async def finish_date(plugin, now=None, reason="timeout"):
         isolated("date_engine.finish_date.duplicate", RuntimeError("重复收尾已忽略"))
         return {"ok": True, "duplicate": True, "reason": reason}
     title = str(active.get("title") or "约会")
-    _set_active(plugin, {})
     bridge = _bridge(plugin)
+    # 2026-11-21 收尾单入口：陪伴已经自动收尾（phase=closed）就只清本地缓存，不再二次收尾
+    if bridge.ready:
+        try:
+            session = bridge.call("date_session").value or {}
+            phase = str((session or {}).get("phase") or "")
+            if phase and phase not in ("active", "paused", "home"):
+                _set_active(plugin, {})
+                return {"ok": True, "duplicate": True, "reason": "already_closed"}
+        except Exception as exc:
+            isolated("date_engine.finish_date.session", exc)
+    _set_active(plugin, {})
     _FINISHING.add(key)
     try:
         await _finish_date_once(plugin, now, reason, title, bridge)
