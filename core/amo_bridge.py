@@ -135,6 +135,7 @@ _CALLS = {
     # 日程 / 心情状态机
     "add_schedule_item": lambda amo, *a, **k: amo.state.add_schedule_item(*a, **k),
     "relation_of": lambda amo, *a, **k: amo.relation_of(*a, **k),
+    "remove_schedule_block": lambda amo, *a, **k: amo.remove_schedule_block(*a, **k),
     "commit_schedule_change": lambda amo, *a, **k: amo.state.commit_schedule_change(*a, **k),
     "current_activity": lambda amo, *a, **k: amo.state.current_activity(*a, **k),
     "nudge": lambda amo, *a, **k: amo.state.nudge(*a, **k),

@@ -230,20 +230,20 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
             return {"ok": False, "duplicate": True,
                     "message": "我们不是已经约好%s了吗？我记着呢，等会儿见！" % title}
 
-    # 新的约会顶掉旧的 pending：他说「明天去不了了，今晚去吧」不能两条都躺在日程里
-    old_pending = [row for row in rows if row.get("status") == "pending"]
-    for row in old_pending:
-        row["status"] = "replaced"
-        row["replaced_at"] = now.timestamp()
-    _drop_date_items(plugin, old_pending)
-
-    # 撞上上班/看病：她自然拒绝，而不是硬塞进日程
+    # 撞上上班/看病：她自然拒绝，而不是硬塞进日程（先校验，通过了再替换旧约）
     conflict = _date_conflict(plugin, when_dt)
     if conflict:
         _save(plugin, rows)
         return {"ok": False, "conflict": True,
                 "message": "哎呀，%s我可能%s诶，我们换个时间，或者改到晚上好不好？"
                            % (_human_day_period(when_dt, now), conflict)}
+
+    # 新的约会顶掉旧的 pending：他说「明天去不了了，今晚去吧」不能两条都躺在日程里
+    old_pending = [row for row in rows if row.get("status") == "pending"]
+    for row in old_pending:
+        row["status"] = "replaced"
+        row["replaced_at"] = now.timestamp()
+    _drop_date_items(plugin, old_pending)
 
     entry = {"title": title, "when": when_dt.strftime("%Y-%m-%d %H:%M"),
              "deposit": deposit, "status": "pending", "compensated": False,
@@ -253,7 +253,7 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
     bridge = _bridge(plugin)
     if bridge.ready:
         item = {"start": when_dt.strftime("%H:%M"),
-                "end": (when_dt + _dt.timedelta(hours=2)).strftime("%H:%M"),
+                "end": _clamp_end(when_dt, when_dt + _dt.timedelta(hours=2)).strftime("%H:%M"),
                 "activity": "和老公" + title, "category": "social",
                 "place": "外面", "zone": "restaurant"}
         bridge.call("add_schedule_item", when_dt.date().isoformat(), item,
@@ -286,29 +286,28 @@ def _date_conflict(plugin, when_dt):
     return schedule_conflict(items, when_dt)
 
 
+def _clamp_end(start_dt, end_dt):
+    """跨零点的块统一钳到 23:59，避免 end<start 被日程校验改短（2026-11-21）。"""
+    if end_dt.date() != start_dt.date():
+        return start_dt.replace(hour=23, minute=59)
+    return end_dt
+
+
 def _drop_date_items(plugin, rows):
-    """把被替换掉的旧约会从她的日程里摘掉（只动 source=date/social 的行）。"""
+    """把被取消/替换的旧约会从日程里摘掉；走陪伴的 commit 入口，不直写 kv。"""
     bridge = _bridge(plugin)
     if not bridge.ready:
         return
-    try:
-        schedule = bridge.schedule()
-        touched = False
-        for row in rows:
-            day = str(row.get("when") or "")[:10]
-            if not day or day not in schedule:
-                continue
-            start = str(row.get("when") or "")[11:16]
-            kept = [item for item in (schedule.get(day) or [])
-                    if not (str(item.get("category") or "") == "social"
-                            and str(item.get("start") or "") == start)]
-            if len(kept) != len(schedule.get(day) or []):
-                schedule[day] = kept
-                touched = True
-        if touched:
-            bridge.call("kv_set", "schedule", schedule)
-    except Exception as exc:
-        isolated("date_engine._drop_date_items", exc)
+    for row in rows:
+        day = str(row.get("when") or "")[:10]
+        start = str(row.get("when") or "")[11:16]
+        title = str(row.get("title") or "")
+        if not day:
+            continue
+        try:
+            bridge.call("remove_schedule_block", day, start, title)
+        except Exception as exc:
+            isolated("date_engine._drop_date_items", exc)
 
 
 def find_pending(plugin, title=""):
@@ -331,6 +330,7 @@ async def cancel_date(plugin, title="", reason="", now=None):
     target["cancelled_at"] = now.timestamp()
     target["lead_hours"] = round(lead_hours, 1)
     _save(plugin, rows)
+    _drop_date_items(plugin, [target])
 
     finance = _finance(plugin)
     idem = "date:cancel:%s" % int(now.timestamp())
@@ -594,7 +594,7 @@ def _attend_mark_attended(target, now, payer, total, dressing):
     target["payer"] = payer
     target["total"] = total
     target["dressing"] = dressing
-    end = now + _dt.timedelta(hours=2)
+    end = _clamp_end(now, now + _dt.timedelta(hours=2))
     title = str(target.get("title") or "约会")
     return end, title
 
@@ -896,8 +896,8 @@ async def _finish_home(plugin, bridge, title, now, reason):
     # 顺序：日程截断（上面）→ 关会话写 date_home → 再写「一个人走回家」，
     # 避免回家日程被截断逻辑误伤，也避免 date_home 先写导致块还在。
     _finish_session(bridge, title, reason, now)
-    home_at = (now + _dt.timedelta(minutes=10)).strftime("%H:%M")
-    sofa_end = (now + _dt.timedelta(minutes=90)).strftime("%H:%M")
+    home_at = _clamp_end(now, now + _dt.timedelta(minutes=10)).strftime("%H:%M")
+    sofa_end = _clamp_end(now, now + _dt.timedelta(minutes=90)).strftime("%H:%M")
     day = now.date().isoformat()
     bridge.call("add_schedule_item", day,
                 {"start": now.strftime("%H:%M"), "end": home_at,

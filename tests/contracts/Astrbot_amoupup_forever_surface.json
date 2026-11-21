@@ -151,6 +151,11 @@
   "relation_of": [
     "name"
   ],
+  "remove_schedule_block": [
+    "activity",
+    "day",
+    "start"
+  ],
   "request_hunger_help": [],
   "save_diary": [
     "day",
