@@ -26,8 +26,8 @@ try:
     from . import npc_roster
     from .date_rules import CLAIM_WINDOWS, is_meal_text, slot_of_hhmm
     from .social_rules import (INVITE_TTL_HOURS, INVITE_WINDOW, MAX_PER_DAY, MIN_GAP_HOURS,
-                               PENDING, can_invite_decision, common_sense, day_label,
-                               find_free_day, invite_idem, invite_status, is_off_day,
+                               PENDING, align_topic_place, can_invite_decision, common_sense,
+                               day_label, find_free_day, invite_idem, invite_status, is_off_day,
                                live_invite, minutes, parse_when, relative_label,
                                retime_ask, same_invite)
 except ImportError:  # 按顶层包/单文件加载时
@@ -38,9 +38,9 @@ except ImportError:  # 按顶层包/单文件加载时
     from services import npc_roster
     from services.date_rules import CLAIM_WINDOWS, is_meal_text, slot_of_hhmm
     from services.social_rules import (INVITE_TTL_HOURS, INVITE_WINDOW, MAX_PER_DAY,
-                                       MIN_GAP_HOURS, PENDING, can_invite_decision,
-                                       common_sense, day_label, find_free_day,
-                                       invite_idem, invite_status, is_off_day,
+                                       MIN_GAP_HOURS, PENDING, align_topic_place,
+                                       can_invite_decision, common_sense, day_label,
+                                       find_free_day, invite_idem, invite_status, is_off_day,
                                        live_invite, minutes, parse_when, relative_label,
                                        retime_ask, same_invite)
 
@@ -64,6 +64,11 @@ KIND_PLACES = {
     "help": ("公司", "office"),
     "borrow": ("", ""),
     "other": ("楼下小馆", "restaurant"),
+}
+#: 地点 → zone（改地点时必须同步，否则会出现「家 + restaurant」这种组合）
+PLACE_ZONES = {
+    "家": "home", "父母家": "home", "妈妈家": "home", "爸爸家": "home",
+    "商场": "mall", "楼下小馆": "restaurant", "酒店": "hotel", "公司": "office",
 }
 KIND_BUDGET = {"meal": 12000, "drink": 8000, "shopping": 25000, "ceremony": 40000,
                "work": 0, "help": 0, "borrow": 60000, "other": 10000}
@@ -888,8 +893,14 @@ class SocialEngine:
             kind = "other"
         place, zone = KIND_PLACES[kind]
         said_place = str(data.get("place") or "").strip()
-        if said_place in ("家", "商场", "楼下小馆", "酒店", "公司"):
+        if said_place in PLACE_ZONES:
             place = said_place
+            zone = PLACE_ZONES[said_place]   # 2026-11-21：地点改了 zone 必须跟着改
+        # 2026-11-21：妈妈/爸爸约饭默认在父母家——LLM 没给地点时不许再排到楼下小馆；
+        # 明确给了商场/酒店/公司等则尊重（said_place 非空且不是家）
+        if npc in ("妈妈", "爸爸") and kind in ("meal", "drink") and (
+                place in ("", "家", "父母家") or not said_place):
+            place, zone = "父母家", "home"
         start = str(data.get("start") or "").strip()
         end = str(data.get("end") or "").strip()
         if not start or not end or _minutes(end) <= _minutes(start):
@@ -921,7 +932,7 @@ class SocialEngine:
         if budget <= 0:
             budget = KIND_BUDGET.get(kind, 10000)
         budget = cap_budget(kind, budget)
-        topic_text = str(data.get("topic") or "").strip()[:20]
+        topic_text = align_topic_place(str(data.get("topic") or "").strip()[:20], place)
         ask = _retime_ask(str(data.get("ask") or ""), target, now, start)
         wrong_name = str(data.get("npc") or "").strip()
         if wrong_name and wrong_name != npc:

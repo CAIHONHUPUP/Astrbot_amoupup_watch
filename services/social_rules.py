@@ -13,6 +13,29 @@ try:
 except ImportError:  # 按顶层包/单文件加载时
     from utils.helpers import is_holiday
 
+#: 邀约标题和地点必须一致：地点不是家，就不能写「回家/来我家」（2026-11-21 线上）
+_HOME_WORDS = ("回家", "来我家", "我家里", "家里吃", "回家吃")
+_PUBLIC_WORDS = ("楼下小馆", "小馆", "商场", "酒店", "咖啡", "餐厅")
+
+
+def align_topic_place(topic, place):
+    """把邀约标题对齐到地点：避免「妈妈中午回家吃饭」却排在楼下小馆。"""
+    text = str(topic or "").strip()
+    target = str(place or "").strip()
+    if not text:
+        return text
+    _is_home = bool(target) and (target == "家" or target.endswith("家"))
+    if target and not _is_home and any(word in text for word in _HOME_WORDS):
+        for word in _HOME_WORDS:
+            text = text.replace(word, "一起")
+        return text
+    if _is_home and any(word in text for word in _PUBLIC_WORDS):
+        for word in _PUBLIC_WORDS:
+            text = text.replace(word, "")
+        return (text or "回家吃饭").strip()
+    return text
+
+
 #: 邀约生命周期：pending -> accepted / rejected / expired / replaced，后四者为终态
 PENDING = "pending"
 ACCEPTED = "accepted"
