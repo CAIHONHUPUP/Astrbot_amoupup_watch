@@ -37,6 +37,9 @@ class FakeAmo:
         self.pushed.append(text)
         return True
 
+    def note_shopping_pending(self, line, until_ts=0):
+        self.pending_line = line
+
 
 class FakeFinance:
     def __init__(self, amo, cash=500000):
@@ -102,6 +105,8 @@ class ShoppingTests(unittest.TestCase):
         self.assertEqual(plugin.amo.items, [])
         self.assertTrue(plugin.finance_repo.meta_get("shop:pending"))
         self.assertIn("这件挺好看的，我能买吗", plugin.amo.pushed)
+        self.assertIn("价格", plugin.amo.pending_line)
+        self.assertIn("余额", plugin.amo.pending_line)
 
     def test_middle_buys_cheap(self):
         plugin, out = self.run_shop(cash=100000)

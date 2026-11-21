@@ -114,8 +114,11 @@ async def tick(plugin, now=None):
             if line:
                 await amo.push_to_owner(line)
             if hasattr(amo, "note_shopping_pending"):
-                amo.note_shopping_pending("你正在商场试%s，等老公回复，语气要充满期待。" % name,
-                                          now.timestamp() + 15 * 60)
+                # 把价格/余额一起给她：他追问「差多少」时能直接算，不用猜
+                amo.note_shopping_pending(
+                    "你正在商场试%s%s，价格 %d 元，卡里余额 %d 元，等老公回复"
+                    % (color, name, buy // 100, cash // 100),
+                    now.timestamp() + 15 * 60)
         except Exception as exc:
             isolated("shopping_engine.tick.3", exc)
     try:
