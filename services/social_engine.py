@@ -830,7 +830,7 @@ class SocialEngine:
     def ready(self, now=None):
         return self.can_invite(now)[0]
 
-    def _bump(self, day, npc, now=None):
+    def _bump(self, day, npc, now=None, target_day=""):
         try:
             count = int(self.repo.meta_get("social:count:" + day, 0) or 0)
         except (TypeError, ValueError):
@@ -841,6 +841,9 @@ class SocialEngine:
         self.repo.mark_task("social:roll:" + day, "invite")
         if npc:
             self.repo.mark_task("social:npc:%s:%s" % (day, npc), "invited")
+            if target_day and target_day != day:
+                # 目标日也要占坑：同一天同一个 NPC 不能再约第二场
+                self.repo.mark_task("social:npc:%s:%s" % (target_day, npc), "invited")
 
     # ---------- 抛邀约：先让 LLM 决定 NPC 约什么 ----------
     def _candidates(self, day):
@@ -924,10 +927,21 @@ class SocialEngine:
         if adjusted is None:
             return None
         target, start, end = adjusted
+        # 邀约必须落在未来：目标时刻已经过去（或只剩不到 30 分钟）就顺延到第二天
+        if start:
+            try:
+                start_dt = _dt.datetime.combine(target, _dt.time.fromisoformat(start))
+                if start_dt <= now + _dt.timedelta(minutes=30):
+                    target = target + _dt.timedelta(days=1)
+            except (ValueError, TypeError):
+                pass
         target = find_free_day(target, start, end, self._conflict, kind=kind)
         if target is None:
             return None
         day_text = target.isoformat()
+        # 同一个 NPC 在「目标日」只能约一次（不能按发出日算）
+        if npc and self.repo.task_done("social:npc:%s:%s" % (day_text, npc)):
+            return None
         budget = int(data.get("budget_cents") or 0)
         if budget <= 0:
             budget = KIND_BUDGET.get(kind, 10000)
@@ -1021,7 +1035,7 @@ class SocialEngine:
                     topic=invite["topic"], place=invite["place"],
                     start=invite["start"], end=invite["end"],
                     idem="evt:invite:" + str(invite.get("token") or ""))
-        self._bump(day, invite["npc"], now)
+        self._bump(day, invite["npc"], now, target_day=str(invite.get("day") or ""))
         return {"ok": True, "invite": invite}
 
     def invite_facts(self, invite=None, now=None):
@@ -1336,8 +1350,10 @@ class SocialEngine:
         return inv
 
     async def accept_invite(self, npc="", place="", amount_cents=0, note="", reason="",
-                            start="", end="", day="", token="", about_user="", ledger_line="", now_line=""):
+                            start="", end="", day="", token="", about_user="", ledger_line="", now_line="",
+                            now=None):
         inv = self._pending_for_decision()
+        now_dt = now or _dt.datetime.now()
         if not inv:
             return {"ok": False, "reason": "no_invite", "message": "现在没有待回的邀约"}
         if token and str(token) != str(inv.get("token") or ""):
@@ -1374,7 +1390,7 @@ class SocialEngine:
             day_text = day_text or parsed_day
             use_start, use_end = parsed_start, parsed_end
         if not day_text:
-            day_text = _dt.date.today().isoformat()
+            day_text = now_dt.date().isoformat()
         requested_day = day_text
         # 幂等：这场约会已经写进日程了，就不再挪日子、不再写第二条
         existing = False
@@ -1414,7 +1430,7 @@ class SocialEngine:
         sched = {}
         # 到点才真的花钱：答应邀约那一刻只占日程（2026-11-20 用户要求：
         # 「不是决定了 6 点半？为什么现在扣钱？」）。借钱是当场掏现金，仍然立刻扣。
-        now_ts = time.time()
+        now_ts = now_dt.timestamp()
         settle_at = _ts(day_text, use_start, 0.0) if use_start else 0.0
         deferred = bool(cost > 0 and kind != "borrow" and settle_at and settle_at > now_ts)
         # 还没到点的约：日程上写「说好要去」，绝不把她事后的回忆（note）提前挂上去
@@ -1660,7 +1676,7 @@ class SocialEngine:
             isolated("social.decide", exc)
             return None
 
-    async def _apply(self, invite, verdict, out):
+    async def _apply(self, invite, verdict, out, now=None):
         if not isinstance(verdict, dict):
             return None
         ask = humanize_numbers(npc_roster.sanitize(verdict.get("ask") or "",
@@ -1675,7 +1691,7 @@ class SocialEngine:
                 note=verdict.get("note") or "", reason=verdict.get("reason") or "",
                 now_line=verdict.get("now") or "",
                 about_user=verdict.get("about_user") or "",
-                ledger_line=verdict.get("ledger_line") or "")
+                ledger_line=verdict.get("ledger_line") or "", now=now)
         elif action == "reject":
             result = await self.reject_invite(reason=verdict.get("reason") or "",
                                               note=verdict.get("note") or "")
@@ -1707,7 +1723,7 @@ class SocialEngine:
             out["pending"] = pending
             verdict = await self._ask(decider, pending, self.invite_facts(pending, now))
             if verdict:
-                out["decision"] = await self._apply(pending, verdict, out)
+                out["decision"] = await self._apply(pending, verdict, out, now=now)
             await self.repay_tick(now)
             return out
         if not self.can_invite(now)[0]:
@@ -1722,7 +1738,7 @@ class SocialEngine:
         out["invite"] = invite
         verdict = await self._ask(decider, invite, self.invite_facts(invite, now))
         if verdict:
-            out["decision"] = await self._apply(invite, verdict, out)
+            out["decision"] = await self._apply(invite, verdict, out, now=now)
         await self.repay_tick(now)
         return out
 

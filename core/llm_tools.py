@@ -219,7 +219,7 @@ async def confirm_arrival_tool(plugin, activity_name="", now=None):
 
 
 async def accept_social_event_tool(plugin, npc="", place="", amount=0.0, note="", start="", end="",
-                                    about_user=""):
+                                    about_user="", now=None):
     """接受邀约：真实扣款、占日程、刷新此刻动作、写记忆/日记/流水。
 
     借钱时金额不能超过余额，超出会被拒；可以少借一点（自己传 amount）。
@@ -234,7 +234,7 @@ async def accept_social_event_tool(plugin, npc="", place="", amount=0.0, note=""
     out = await engine.accept_invite(npc=str(npc or ""), place=str(place or ""),
                                      amount_cents=amount_cents, note=str(note or ""),
                                      start=str(start or ""), end=str(end or ""),
-                                     about_user=str(about_user or ""))
+                                     about_user=str(about_user or ""), now=now)
     if not out.get("ok"):
         return ("（系统）没去成：%s。按这个事实说话，不要假装已经出门。"
                 % (out.get("message") or out.get("reason") or "失败"))

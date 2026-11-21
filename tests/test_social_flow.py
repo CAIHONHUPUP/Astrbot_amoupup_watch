@@ -48,7 +48,7 @@ def test_accept_keeps_money_until_event_starts():
     eng, repo, fin = _engine()
     invite = asyncio.run(eng.create_invite(now=SAT, composer=_composer()))["invite"]
     note = "答应了如烟，下午一起去商场逛逛"
-    res = asyncio.run(eng.accept_invite(note=note))
+    res = asyncio.run(eng.accept_invite(now=SAT, note=note))
     assert res["ok"]
     # 2026-11-20 用户要求：答应那一刻只占日程，到点（事件开始）才真的扣钱
     assert fin.cash == 500000 and fin.expenses == []
@@ -73,7 +73,7 @@ def test_accept_keeps_money_until_event_starts():
 def test_short_money_cannot_be_accepted():
     eng, repo, fin = _engine(cash=1000)
     asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
-    res = asyncio.run(eng.accept_invite(note="想去"))
+    res = asyncio.run(eng.accept_invite(now=SAT, note="想去"))
     assert res["ok"] is False and res["reason"] == "insufficient"
     assert fin.cash == 1000 and fin.expenses == []
 
@@ -156,7 +156,7 @@ def test_accept_conflict_moves_to_next_free_day():
     eng, repo, fin = _engine()
     asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
     fin.windows["2026-11-21"] = [{"start": "14:00", "end": "17:00", "activity": "别的约"}]
-    res = asyncio.run(eng.accept_invite(note="想去"))
+    res = asyncio.run(eng.accept_invite(now=SAT, note="想去"))
     assert res["ok"]
     assert res["schedule"]["day"] == "2026-11-22", "撞车要自动改期，不能写重叠日程"
     assert fin.schedules[-1]["day"] == "2026-11-22"
@@ -166,7 +166,7 @@ def test_display_is_human_words_without_tags_or_cents():
     eng, repo, fin = _engine()
     asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
     assert not eng.events(5)[0]["display"].startswith("[")
-    asyncio.run(eng.accept_invite(note="答应了如烟，下午去商场逛，预算两百多"))
+    asyncio.run(eng.accept_invite(now=SAT, note="答应了如烟，下午去商场逛，预算两百多"))
     row = eng.events(5)[0]
     assert not row["display"].startswith("[")
     assert "¥" not in row["display"]
@@ -215,7 +215,7 @@ def test_tools_accept_and_reject():
     from types import SimpleNamespace
     plugin = SimpleNamespace(social=eng)
     asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
-    msg = asyncio.run(llm_tools.accept_social_event_tool(plugin, note="和柳如烟去逛街了"))
+    msg = asyncio.run(llm_tools.accept_social_event_tool(plugin, note="和柳如烟去逛街了", now=SAT))
     assert "要等到" in msg and "现在先别说" in msg
     assert fin.expenses == [] and eng.pending_charges()
     assert eng.pending_invite() is None
