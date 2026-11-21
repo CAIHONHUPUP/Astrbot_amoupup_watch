@@ -136,6 +136,7 @@ _CALLS = {
     "add_schedule_item": lambda amo, *a, **k: amo.state.add_schedule_item(*a, **k),
     "relation_of": lambda amo, *a, **k: amo.relation_of(*a, **k),
     "remove_schedule_block": lambda amo, *a, **k: amo.remove_schedule_block(*a, **k),
+    "append_diary_note": lambda amo, *a, **k: amo.append_diary_note(*a, **k),
     "commit_schedule_change": lambda amo, *a, **k: amo.state.commit_schedule_change(*a, **k),
     "current_activity": lambda amo, *a, **k: amo.state.current_activity(*a, **k),
     "nudge": lambda amo, *a, **k: amo.state.nudge(*a, **k),
@@ -721,6 +722,11 @@ class FinanceLink:
 
     def _long_diary(self, amo, text):
         try:
+            appender = getattr(amo, "append_diary_note", None)
+            if callable(appender):
+                result = appender(time.strftime("%Y-%m-%d"), str(text))
+                if isinstance(result, dict) and result.get("code") == 0:
+                    return True
             writer = getattr(amo, "write_diary_text", None)
             if not callable(writer):
                 return False

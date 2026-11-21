@@ -13,6 +13,10 @@
     "reason",
     "source"
   ],
+  "append_diary_note": [
+    "day",
+    "text"
+  ],
   "balance": [
     "account"
   ],
