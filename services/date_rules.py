@@ -201,6 +201,15 @@ def parse_when(text, now=None):
     explicit_clock = bool(match)
     if match:
         hour, minute = int(match.group(1)), int(match.group(2))
+        # 「晚上8:00 / 下午3:00」要先做 12/24 小时校正，不能当成早上 8 点
+        if any(word in body for word in ("下午", "傍晚")):
+            if hour < 12:
+                hour += 12
+        elif any(word in body for word in ("晚上", "夜里", "深夜", "明晚", "今晚")):
+            if hour == 12:
+                hour = 0
+            elif hour < 12:
+                hour += 12
         target = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
     else:
         for word, hour, minute in (

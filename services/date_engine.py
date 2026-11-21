@@ -255,7 +255,7 @@ async def make_date(plugin, title, when="", deposit_cents=0, now=None):
         item = {"start": when_dt.strftime("%H:%M"),
                 "end": _clamp_end(when_dt, when_dt + _dt.timedelta(hours=2)).strftime("%H:%M"),
                 "activity": "和老公" + title, "category": "social",
-                "place": "外面", "zone": "restaurant"}
+                "place": "外面", "zone": "restaurant", "locked": True}
         bridge.call("add_schedule_item", when_dt.date().isoformat(), item,
                     source="date", reason="约会")
         bridge.call("set_date_mood", "你在期待和老公%s，心情很好。" % title,
@@ -673,7 +673,7 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
             await bridge.call_async("push_to_owner", incident)
     day = now.date().isoformat()
     item = {"start": now.strftime("%H:%M"), "end": end.strftime("%H:%M"),
-            "activity": "和老公" + title, "category": "social", "place": "外面",
+            "activity": "和老公" + title, "category": "social", "place": "外面", "locked": True,
             "zone": "restaurant", "subject": "bot", "happened": True}
     bridge.call("add_schedule_item", day, item, source="date", reason="赴约")
     try:
