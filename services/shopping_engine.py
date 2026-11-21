@@ -165,10 +165,18 @@ async def flush(plugin, now=None):
         return None
     pending = _pending_order(repo)
     if pending and float(pending.get("due") or 0) <= now.timestamp():
+        line = ""
         try:
-            await amo.push_to_owner("算啦，你肯定在忙，我先放回衣架了。")
+            from . import social_ai as _social_ai
+            line = await _social_ai.phrase(
+                plugin, "试穿后等了十五分钟没等到回复，她把衣服放回衣架了", "有点失落")
         except Exception as exc:
-            isolated("shopping_engine.flush", exc)
+            isolated("shopping_engine.flush.phrase", exc)
+        if line:
+            try:
+                await amo.push_to_owner(line)
+            except Exception as exc:
+                isolated("shopping_engine.flush", exc)
         _clear_pending(repo)
     events = _pending_events(repo)
     keep, sent = [], []
@@ -186,14 +194,24 @@ async def flush(plugin, now=None):
         price = int(event.get("price") or 0)
         cash = int(event.get("cash") or 0)
         if kind == "tryon":
-            text = "老公你看！我试了这件%s%s，好看吗？" % (color, name)
+            facts = "在商场试了%s%s，想问好不好看" % (color, name)
+            style = "期待他夸"
         else:
-            text = "我回来啦！今天买了%s，花了%d元，穿上真的超好看！" % (name, price)
-            if price > 500 and cash < 200000:
-                text += "不过今天一冲动花了这么多，你不会骂我吧……接下来我要吃土了，求老公夸夸我。"
+            facts = "逛街回来，买了%s，价格 %d 元，余额 %d 元" % (
+                name, price // 100, cash // 100)
+            style = "有点心虚，怕他说乱花钱" if price > 50000 and cash < 200000 else "开心炫耀"
+        line = ""
         try:
-            await amo.push_to_owner(text)
-            sent.append(text)
+            from . import social_ai as _social_ai
+            line = await _social_ai.phrase(plugin, facts, style)
+        except Exception as exc:
+            isolated("shopping_engine.flush.phrase", exc)
+        if not line:
+            keep.append(event)   # 模型不可用：留到下次再试，不塞模板
+            continue
+        try:
+            await amo.push_to_owner(line)
+            sent.append(line)
         except Exception:
             keep.append(event)
     try:
