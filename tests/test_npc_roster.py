@@ -97,3 +97,13 @@ def test_record_strips_foreign_name_and_keeps_fallback():
 
 def json_text(payload):
     return str(payload)
+
+
+
+def test_sanitize_partial_name_does_not_eat_verb():
+    assert npc_roster.sanitize("被王姐拉去相亲", "柳如烟") == "被柳如烟拉去相亲"
+
+
+def test_sanitize_complete_name_can_be_replaced():
+    out = npc_roster.sanitize("今天，王姐约我吃饭。", "柳如烟")
+    assert "柳如烟" in out and "王姐" not in out

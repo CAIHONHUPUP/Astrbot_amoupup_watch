@@ -71,6 +71,11 @@ _FUNCTION_CHARS = frozenset(
     "的了在是正还又就也都很大太要会能把被给和跟与我和你他她它这那哪今昨明早晚午天日月年号点分时"
     "上下前后里外中间边么吧呢啊呀哦嘛着自己俩位个些点次趟回")
 _VERBS = "说|聊|吃|去|逛|来|问|约|请|走|接|送|借|还|骂|批评|结婚|生日|出差|相亲|逛街|玩"
+#: 名字后面可能紧跟的动词（用于把「王姐拉」这种 3 字误判切回「王姐」）
+_EXTRA_VERBS = ("拉", "推", "拽", "打", "凶", "催", "劝", "骗", "害", "救", "扶",
+                "抱", "摸", "亲", "搂", "踢", "拍", "夸", "带", "领", "找")
+_VERB_WORDS = tuple(_VERBS.split("|")) + _EXTRA_VERBS
+_VERBS_EXT = "|".join(_VERB_WORDS)
 _SAYS = "说|约我|问我|问起|告诉我|发微信|打电话|请我|带我|陪我|批评我|骂我|跟我|找我"
 _TIMES = "今天|昨天|最近|刚刚|又|下周|明天|周末"
 
@@ -177,9 +182,19 @@ def sanitize(text, npc=""):
     if _isolated is not None:
         _isolated("social.roster.blocked", RuntimeError("%s | npc=%s | %s" % (hits, npc, value[:80])))
     if npc and len(hits) == 1 and npc not in hits:
-        fixed = value.replace(hits[0], npc)
-        if not foreign_names(fixed):
-            return fixed
+        token = hits[0]
+        # 3 字命中常把动词一起吞进来（「王姐拉」「王姐约」）：去掉尾字再替换
+        if len(token) >= 3 and token.endswith(_VERB_WORDS):
+            token = token[:-1]
+        bounded = re.search(
+            r"(?:^|[，。！？、：；\s\"“”]|(?:和|跟|与|给|陪|请|被|让|叫|找|对|向))"
+            r"%s(?=$|[，。！？、：；\s\"“”]|(?:%s))" % (re.escape(token), _VERBS_EXT),
+            value)
+        if bounded:
+            fixed = value.replace(token, npc, 1)
+            # 替换后「柳如烟拉/柳如烟约」还会被当成新人名，排除以 npc 开头的命中
+            if not [hit for hit in foreign_names(fixed) if not str(hit).startswith(npc)]:
+                return fixed
     return ""
 
 
