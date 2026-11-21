@@ -101,7 +101,7 @@ def json_text(payload):
 
 
 def test_sanitize_partial_name_does_not_eat_verb():
-    assert npc_roster.sanitize("被王姐拉去相亲", "柳如烟") == "被柳如烟拉去相亲"
+    assert npc_roster.sanitize("被王姐拉去逛街", "柳如烟") == "被柳如烟拉去逛街"
 
 
 def test_sanitize_complete_name_can_be_replaced():
