@@ -26,6 +26,13 @@ def test_roster_is_exactly_the_seven():
     assert len(npc_roster.ROSTER) == 7
 
 
+def test_role_words_are_not_foreign_names():
+    # 2026-11-21：方圆状态「在考驾照，被教练骂惨了」里的「教练」被当成陌生人名，
+    # sanitize 替换成「方圆」，变成「被方圆骂惨了」——角色词不是人名。
+    assert npc_roster.foreign_names("在考驾照，被教练骂惨了") == []
+    assert npc_roster.sanitize("在考驾照，被教练骂惨了", "方圆") == "在考驾照，被教练骂惨了"
+
+
 def test_roster_line_lists_everyone_and_forbids_invention():
     line = npc_roster.ROSTER_LINE
     for name in npc_roster.NAMES:

@@ -380,7 +380,8 @@ def _invite(token="soc-a", **over):
 
 def test_expired_invite_is_cleared_and_unblocks_can_invite():
     eng, repo, fin = _social_engine()
-    eng.set_invite(_invite(expires=time.time() - 10))
+    # 过期时间要相对 SAT 算：用 time.time() 会在真实时间过了 10:00 后假红
+    eng.set_invite(_invite(expires=SAT.timestamp() - 10))
     ok, reason = eng.can_invite(SAT)
     assert ok is True and reason == ""
     assert eng.pending_invite() is None, "过期邀约必须清掉，否则冷却闸永远卡 pending"
@@ -388,7 +389,7 @@ def test_expired_invite_is_cleared_and_unblocks_can_invite():
 
 def test_accept_expired_invite_is_rejected():
     eng, repo, fin = _social_engine()
-    eng.set_invite(_invite(expires=time.time() - 10))
+    eng.set_invite(_invite(expires=SAT.timestamp() - 10))
     res = asyncio.run(eng.accept_invite(note="好呀"))
     assert res["ok"] is False and res["reason"] == "no_invite"
     assert fin.cash == 500000 and fin.expenses == []
@@ -428,7 +429,7 @@ def test_collision_reschedule_keeps_one_idem():
 
 def test_expire_marks_invite_resolved():
     eng, repo, fin = _social_engine()
-    eng.set_invite(_invite(token="soc-exp", expires=time.time() - 1))
+    eng.set_invite(_invite(token="soc-exp", expires=SAT.timestamp() - 1))
     out = eng.expire_invite(SAT)
     assert out["reason"] == "expired"
     assert eng.is_resolved("soc-exp") and eng.pending_invite() is None
