@@ -45,6 +45,8 @@ except ImportError:  # 按顶层包/单文件加载时
                                        retime_ask, same_invite)
 
 logger = logging.getLogger("watch.social")
+#: accept_invite 重入锁：同一条邀约不能被面板和 tick 同时处理
+_DECIDING: set = set()
 
 #: 好感度分档（2026-11-20 用户口径）：≥60 正常考虑；40-59 一半概率推掉；<40 基本婉拒
 AFFINITY_ACCEPT_OK = 60
@@ -933,8 +935,8 @@ class SocialEngine:
                 start_dt = _dt.datetime.combine(target, _dt.time.fromisoformat(start))
                 if start_dt <= now + _dt.timedelta(minutes=30):
                     target = target + _dt.timedelta(days=1)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                logger.debug("[社交] 邀约时间解析失败: %r", exc)
         target = find_free_day(target, start, end, self._conflict, kind=kind)
         if target is None:
             return None
@@ -1352,6 +1354,24 @@ class SocialEngine:
     async def accept_invite(self, npc="", place="", amount_cents=0, note="", reason="",
                             start="", end="", day="", token="", about_user="", ledger_line="", now_line="",
                             now=None):
+        inv = self._pending_for_decision()
+        lock = str(token or "") or str((inv or {}).get("token") or "")
+        if lock and lock in _DECIDING:
+            return {"ok": False, "reason": "busy", "message": "这条邀约正在处理，别重复点"}
+        if lock:
+            _DECIDING.add(lock)
+        try:
+            return await self._accept_invite_locked(
+                npc=npc, place=place, amount_cents=amount_cents, note=note, reason=reason,
+                start=start, end=end, day=day, token=token, about_user=about_user,
+                ledger_line=ledger_line, now_line=now_line, now=now)
+        finally:
+            if lock:
+                _DECIDING.discard(lock)
+
+    async def _accept_invite_locked(self, npc="", place="", amount_cents=0, note="", reason="",
+                                    start="", end="", day="", token="", about_user="",
+                                    ledger_line="", now_line="", now=None):
         inv = self._pending_for_decision()
         now_dt = now or _dt.datetime.now()
         if not inv:
