@@ -446,7 +446,18 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             yield item
     async def handle_sick_event(self, *args, **kwargs):
         return await self.medical.handle_sick_event(*args, **kwargs) if self.medical else {"ok": False}
+    def _owner_only(self, event):
+        """约会/购物/生病这些会花钱改状态的入口：只认管理员/主人。"""
+        try:
+            if hasattr(event, "is_admin"):
+                return bool(event.is_admin())
+        except Exception:
+            return False
+        return True   # 没有 is_admin 的旧平台按私聊处理
+
     async def on_sick_event(self, event):
+        if not self._owner_only(event):
+            return
         try:
             from .services.medical_engine import sick_event_reply
         except ImportError:
@@ -644,6 +655,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             yield event.plain_result(message)
     async def on_shopping_reply(self, event):
         """挂起订单的二次确认：买/好看/转账结算，太贵/不好看放弃。"""
+        if not self._owner_only(event):
+            return
         try:
             from .services.shopping_engine import handle_reply
         except ImportError:
@@ -711,6 +724,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
 
     async def on_date_propose(self, event):
         """自然语言兜底：约定“去吃火锅吧” → 建约会；“好/到了/我来了” → 赴约。"""
+        if not self._owner_only(event):
+            return
         text = str(getattr(event, "message_str", "") or "")
         try:
             from .services.date_engine import handle_date_text
@@ -758,6 +773,8 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
 
     async def on_date_cancel(self, event):
         """自然语言里说去不了/放鸽子：有 pending 约会才触发。"""
+        if not self._owner_only(event):
+            return
         text = str(getattr(event, "message_str", "") or "")
         if "/取消约会" in text:
             return

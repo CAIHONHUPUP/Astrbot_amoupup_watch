@@ -502,12 +502,36 @@ async def attend_date(plugin, title="", mode="", now=None):
             "status": "dating"}
 
 
+def attend_window_ok(when_dt, now, early_hours=2, late_minutes=120):
+    """赴约时间窗：约的是未来（超过 2 小时）就不许提前「好」；迟到上限 2 小时。"""
+    if when_dt is None or now is None:
+        return True, ""
+    early = (when_dt - now).total_seconds() > early_hours * 3600
+    late = (now - when_dt).total_seconds() > late_minutes * 60
+    if early:
+        return False, "now_too_early"
+    if late:
+        return False, "now_too_late"
+    return True, ""
+
+
 async def _attend_open(plugin, title, now):
     """加载与目标定位：取待赴约、财务钱包、约会中状态与总价。"""
     rows = _load(plugin)
     target = _pick_pending(rows, title)
     if target is None:
         return None, {"ok": False, "message": "今天没有约好的事呀，是不是记错了？"}
+    when_dt = None
+    try:
+        when_dt = _dt.datetime.strptime(str(target.get("when") or ""), "%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        when_dt = None
+    ok, reason = attend_window_ok(when_dt, now)
+    if not ok:
+        return None, {"ok": False, "reason": reason,
+                      "message": "现在才 %s，我们约的是 %s 呀，到点再说～"
+                                 % (now.strftime("%H:%M"),
+                                    when_dt.strftime("%H:%M") if when_dt else "??")}
     finance = _finance(plugin)
     cash = int(finance.balance_cents() or 0) if finance is not None and hasattr(finance, "balance_cents") else 0
     idem = "date:attend:%s" % int(now.timestamp())

@@ -192,7 +192,7 @@ class ArrivalTests(unittest.TestCase):
     def test_confirm_arrival_tool(self):
         p = FakePlugin()
         seed_pending(p)
-        msg = asyncio.run(confirm_arrival_tool(p, "逛街"))
+        msg = asyncio.run(confirm_arrival_tool(p, "逛街", now=NOW))
         self.assertIn("约会开场", msg)
         self.assertEqual(de.active_date(p)["status"], "dating")
 

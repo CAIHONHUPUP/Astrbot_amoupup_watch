@@ -99,7 +99,7 @@ class FakePlugin:
 class DateEngineTests(unittest.TestCase):
     def test_make_date_expects(self):
         plugin = FakePlugin()
-        out = asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        out = asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         self.assertTrue(out["ok"])
         self.assertEqual(len(plugin.finance.amo.state.items), 1)
         self.assertEqual(plugin.finance.moods[0][0], {"开心": 10})
@@ -128,7 +128,7 @@ class DateEngineTests(unittest.TestCase):
 
     def test_cancel_broke(self):
         plugin = FakePlugin(cash=0)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         out = asyncio.run(date_engine.cancel_date(plugin, "火锅", now=NOW))
         self.assertTrue(out["broke"])
         self.assertIn("泡面", out["message"])
@@ -136,7 +136,7 @@ class DateEngineTests(unittest.TestCase):
 
     def test_transfer_compensation(self):
         plugin = FakePlugin(cash=0)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         asyncio.run(date_engine.cancel_date(plugin, "火锅", now=NOW))
         out = asyncio.run(date_engine.maybe_compensate(plugin, "[转账]200 你自己去吃"))
         self.assertTrue(out["ok"])
@@ -144,9 +144,23 @@ class DateEngineTests(unittest.TestCase):
         self.assertTrue(any("转账" in m for m in plugin.finance.memories))
         self.assertEqual(plugin.finance.amo.moods[-1][0], "")
 
+    def test_attend_window_rejects_future_date(self):
+        ok, reason = date_engine.attend_window_ok(NOW + dt.timedelta(hours=6), NOW)
+        self.assertFalse(ok)
+        self.assertEqual("now_too_early", reason)
+
+    def test_attend_window_allows_near_time(self):
+        ok, _reason = date_engine.attend_window_ok(NOW + dt.timedelta(minutes=30), NOW)
+        self.assertTrue(ok)
+
+    def test_attend_window_rejects_too_late(self):
+        ok, reason = date_engine.attend_window_ok(NOW - dt.timedelta(hours=5), NOW)
+        self.assertFalse(ok)
+        self.assertEqual("now_too_late", reason)
+
     def test_attend_host_with_fund(self):
         plugin = FakePlugin(cash=50000)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         asyncio.run(date_engine.note_transfer(plugin, "[转账]300 火锅基金"))
         out = asyncio.run(date_engine.attend_date(plugin, "火锅", now=NOW))
         self.assertTrue(out["ok"])
@@ -164,7 +178,7 @@ class DateEngineTests(unittest.TestCase):
     def test_attend_keeps_face_to_face_on_date_day(self):
         """B 方案：约会当天仍然面对面，不被收尾的「各回各家」误杀。"""
         plugin = FakePlugin(cash=50000)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         asyncio.run(date_engine.attend_date(plugin, "火锅", now=NOW))
         line = plugin.finance.amo.date_now[-1][0]
         self.assertIn("站在你身边", line)
@@ -172,21 +186,21 @@ class DateEngineTests(unittest.TestCase):
 
     def test_attend_her_treat_missing_fund(self):
         plugin = FakePlugin(cash=50000)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         out = asyncio.run(date_engine.attend_date(plugin, "火锅", now=NOW))
         self.assertEqual(out["payer"], "her")
         self.assertTrue(any("肉疼" in d for d in plugin.finance.diaries))
 
     def test_attend_proud_host_mode(self):
         plugin = FakePlugin(cash=50000)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         out = asyncio.run(date_engine.attend_date(plugin, "火锅", "我请客", now=NOW))
         self.assertEqual(out["payer"], "her")
         self.assertTrue(any("骄傲" in d for d in plugin.finance.diaries))
 
     def test_attend_aa(self):
         plugin = FakePlugin(cash=50000)
-        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 18:00", now=NOW))
+        asyncio.run(date_engine.make_date(plugin, "吃火锅", "2026-11-14 12:30", now=NOW))
         out = asyncio.run(date_engine.attend_date(plugin, "火锅", "AA", now=NOW))
         self.assertEqual(out["payer"], "aa")
         bills = [x for x in plugin.finance.spent if x[1].startswith("约会：")]

@@ -199,7 +199,7 @@ async def propose_date_tool(plugin, activity="", time=""):
     return out.get("message") or "好呀好呀！那说定啦，晚点见~"
 
 
-async def confirm_arrival_tool(plugin, activity_name=""):
+async def confirm_arrival_tool(plugin, activity_name="", now=None):
     """等待赴约时确认老公到达：立刻进入 dating，并说见面的话。"""
     try:
         from ..services.date_engine import active_date, attend_date, find_pending
@@ -210,7 +210,7 @@ async def confirm_arrival_tool(plugin, activity_name=""):
     pending = find_pending(plugin, activity_name)
     if pending is None:
         return "现在没有在等你赴约呀。"
-    out = await attend_date(plugin, pending.get("title"))
+    out = await attend_date(plugin, pending.get("title"), now=now)
     if not out.get("ok"):
         return out.get("message") or "约会没开始成……"
     return ("（系统）约会已经开始，状态已切到 dating。"
