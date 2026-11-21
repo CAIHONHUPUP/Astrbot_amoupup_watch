@@ -40,7 +40,7 @@ class FakeAmo:
     def note_shopping_pending(self, line, until_ts=0):
         self.pending_line = line
 
-    def note_recent_topic(self, text, until_ts=0):
+    def note_recent_topic(self, text, until_ts=0, key="", ttl_hours=36):
         self.topic_line = text
 
 

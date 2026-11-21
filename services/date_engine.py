@@ -670,7 +670,8 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
             _amo_obj = bridge.resolve()
             if hasattr(_amo_obj, "note_recent_topic"):
                 _amo_obj.note_recent_topic(
-                    "约会中：%s" % incident, (end.timestamp() + 2 * 3600))
+                    "约会中：%s" % incident, (end.timestamp() + 2 * 3600),
+                    key="date:%s" % end.date().isoformat())
         except Exception as exc:
             isolated("date_engine.incident_topic", exc)
         line = ""
@@ -687,7 +688,8 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
                 if hasattr(_amo_obj, "note_recent_topic"):
                     _amo_obj.note_recent_topic(
                         "约会中：%s；你刚跟他说：%s" % (incident, line),
-                        (end.timestamp() + 2 * 3600))
+                        (end.timestamp() + 2 * 3600),
+                        key="date:%s" % end.date().isoformat())
             except Exception as exc:
                 isolated("date_engine.incident_topic_line", exc)
             gate = getattr(bridge.resolve(), "request_push", None)
