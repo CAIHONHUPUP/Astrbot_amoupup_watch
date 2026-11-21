@@ -990,12 +990,38 @@ class FinanceLink:
         except Exception:
             return []
         out = []
+        seen = set()
         for row in rows:
             if not isinstance(row, dict):
                 continue
             start, end = str(row.get("start") or ""), str(row.get("end") or "")
             if not start or not end:
                 continue
+            key = (start, end, str(row.get("activity") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"start": start, "end": end,
+                        "activity": str(row.get("activity") or ""),
+                        "category": str(row.get("category") or "")})
+        # 未来的事只存在待办里（JIT 不提前铺日程）：冲突检测必须把 todo 也算上
+        try:
+            todos = getattr(amo.state, "todos", None)
+            todo_rows = todos(str(day)) if callable(todos) else []
+        except Exception as exc:
+            isolated("finance.schedule_windows.todos", exc)
+            todo_rows = []
+        for row in todo_rows or []:
+            if not isinstance(row, dict):
+                continue
+            start = str(row.get("start") or "")
+            end = str(row.get("end_time") or row.get("end") or "")
+            if not start or not end:
+                continue
+            key = (start, end, str(row.get("activity") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
             out.append({"start": start, "end": end,
                         "activity": str(row.get("activity") or ""),
                         "category": str(row.get("category") or "")})

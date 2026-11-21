@@ -24,6 +24,18 @@ SYSTEM = ("你是一个记忆提炼助手。请将以下当天的流水记忆提
           "过滤无意义的寒暄。只输出提炼后的结果，不要解释。")
 
 MAX_ROWS = 300
+#: 只提炼守护自己写的记忆；陪伴的 activity/diary 不能被归档
+_WATCH_KINDS = {"finance", "finance_decision", "news", "social", "medical", "work", "bill"}
+
+
+def _watch_rows(rows):
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("kind") or "") in _WATCH_KINDS:
+            out.append(row)
+    return out
 MAX_GROUPS = 4
 MAX_FACTS = 8
 
@@ -130,6 +142,7 @@ async def nightly_tick(plugin, now=None):
         # 不封当天：读失败多半是瞬时抖动（写锁/热重载/插件刚起来），
         # 封了就要等第二天，等于白丢一晚的记忆提炼。
         return {"ok": False, "reason": "read_failed"}
+    rows = _watch_rows(rows)
     if not rows:
         if repo is not None:
             repo.meta_set("nightly_memory_day", day)

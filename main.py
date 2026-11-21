@@ -170,7 +170,17 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
             if amo is None:
                 return
             rows = self.finance_repo.npcs() if self.finance_repo is not None else []
-            mapping = {str(r.get("name")): str(r.get("relation")) for r in rows if r.get("name")}
+            fresh = {str(r.get("name")): str(r.get("relation")) for r in rows if r.get("name")}
+            if not fresh:
+                return  # 守护这边没数据时不要清空陪伴已有的 NPC 摘要
+            try:
+                old = amo.db.kv_get("npc_summary", {}) or {}
+            except Exception as exc:
+                isolated("npc.mirror.read", exc)
+                old = {}
+            # 合并而不是覆盖：陪伴/别的来源写的条目保留，同名以守护为准
+            mapping = dict(old) if isinstance(old, dict) else {}
+            mapping.update(fresh)
             amo.db.kv_set("npc_summary", mapping)
             logger.info("[WATCH] npc_summary mirrored %d", len(mapping))
         except Exception as exc:
