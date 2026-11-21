@@ -109,7 +109,7 @@ def test_invite_is_queued_then_decided_after_date():
 def test_accept_is_blocked_while_busy():
     eng, repo, fin = _engine(dating=True)
     made = asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
-    res = asyncio.run(eng.accept_invite(note="去了"))
+    res = asyncio.run(eng.accept_invite(note="去了", now=SAT))
     assert res["ok"] is False and res["reason"] == "busy"
     assert fin.cash == 500000
     assert eng.pending_invite() is not None

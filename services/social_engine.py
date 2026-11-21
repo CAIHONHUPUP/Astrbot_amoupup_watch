@@ -1354,7 +1354,7 @@ class SocialEngine:
     async def accept_invite(self, npc="", place="", amount_cents=0, note="", reason="",
                             start="", end="", day="", token="", about_user="", ledger_line="", now_line="",
                             now=None):
-        inv = self._pending_for_decision()
+        inv = self._pending_for_decision(now)
         lock = str(token or "") or str((inv or {}).get("token") or "")
         if lock and lock in _DECIDING:
             return {"ok": False, "reason": "busy", "message": "这条邀约正在处理，别重复点"}
@@ -1372,13 +1372,13 @@ class SocialEngine:
     async def _accept_invite_locked(self, npc="", place="", amount_cents=0, note="", reason="",
                                     start="", end="", day="", token="", about_user="",
                                     ledger_line="", now_line="", now=None):
-        inv = self._pending_for_decision()
+        inv = self._pending_for_decision(now)
         now_dt = now or _dt.datetime.now()
         if not inv:
             return {"ok": False, "reason": "no_invite", "message": "现在没有待回的邀约"}
         if token and str(token) != str(inv.get("token") or ""):
             return {"ok": False, "reason": "stale", "message": "这条邀约已经过去了"}
-        busy = self.busy_state()
+        busy = self.busy_state(now_dt)
         if busy:
             return {"ok": False, "reason": "busy",
                     "message": "你正在%s，手机静音着，等忙完再看" % ("约会" if busy == "dating" else "睡觉")}
@@ -1566,8 +1566,8 @@ class SocialEngine:
                 "plan": plan, "about_user": about, "invite": inv, "schedule": sched,
                 "steps": steps}
 
-    async def reject_invite(self, reason="", note="", token=""):
-        inv = self._pending_for_decision()
+    async def reject_invite(self, reason="", note="", token="", now=None):
+        inv = self._pending_for_decision(now)
         if not inv:
             return {"ok": False, "reason": "no_invite", "message": "现在没有待回的邀约"}
         if token and str(token) != str(inv.get("token") or ""):
@@ -1714,7 +1714,7 @@ class SocialEngine:
                 ledger_line=verdict.get("ledger_line") or "", now=now)
         elif action == "reject":
             result = await self.reject_invite(reason=verdict.get("reason") or "",
-                                              note=verdict.get("note") or "")
+                                              note=verdict.get("note") or "", now=now)
         else:
             return None
         out["events"].append(result)

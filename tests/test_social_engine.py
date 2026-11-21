@@ -43,7 +43,7 @@ def test_borrow_accept_creates_receivable_and_repay_is_idempotent():
     eng, repo, fin = _engine()
     made = asyncio.run(eng.create_invite(now=NOW, kind="borrow", npc="柳如烟", amount_cents=50000))
     assert made["ok"]
-    res = asyncio.run(eng.accept_invite(note="借给柳如烟周转一下"))
+    res = asyncio.run(eng.accept_invite(note="借给柳如烟周转一下", now=NOW))
     assert res["ok"] and repo.receivables()
     assert fin.cash == 450000
     asyncio.run(eng.repay_tick(dt.date(2026, 12, 1)))

@@ -82,7 +82,7 @@ def test_reject_records_reason_without_charge():
     eng, repo, fin = _engine()
     asyncio.run(eng.create_invite(now=SAT, composer=_composer()))
     note = "跟如烟说今天不去了，实在太累"
-    res = asyncio.run(eng.reject_invite(reason="太累了，想在家躺着", note=note))
+    res = asyncio.run(eng.reject_invite(reason="太累了，想在家躺着", note=note, now=SAT))
     assert res["ok"]
     assert fin.cash == 500000 and fin.expenses == [] and fin.schedules == []
     assert fin.moods[0] == {"郁闷": 4}

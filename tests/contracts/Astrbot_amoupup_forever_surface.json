@@ -138,6 +138,12 @@
     "name",
     "price_cents"
   ],
+  "note_recent_topic": [
+    "key",
+    "text",
+    "ttl_hours",
+    "until_ts"
+  ],
   "note_shopping_pending": [
     "line",
     "until_ts"

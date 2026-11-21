@@ -195,7 +195,8 @@
     "core",
     "core.amo_bridge",
     "guard",
-    "services.date_rules"
+    "services.date_rules",
+    "services.social_ai"
   ],
   "services/date_rules.py": [],
   "services/diary_engine.py": [],
@@ -313,6 +314,7 @@
     "guard",
     "services",
     "services.city",
+    "services.social_ai",
     "utils",
     "utils.helpers",
     "utils.money"
