@@ -102,14 +102,17 @@ async def tick(plugin, now=None):
         except Exception as exc:
             isolated("shopping_engine.tick.2", exc)
         try:
-            if cash < buy:
-                await amo.push_to_owner(
-                    "老公！我试了一件%s%s，超好看，要%d块，我的钱不够，能赞助我一点吗？"
-                    % (color, name, buy // 100))
-            else:
-                await amo.push_to_owner(
-                    "老公！我试了一件%s%s，超好看，只要%d块，我能买吗？"
-                    % (color, name, buy // 100))
+            facts = "在商场试了一件%s%s，价格 %d 元，卡里余额 %d 元" % (
+                color, name, buy // 100, cash // 100)
+            style = "钱不够，想让他赞助一点" if cash < buy else "很喜欢，想问能不能买"
+            line = ""
+            try:
+                from . import social_ai
+                line = await social_ai.phrase(plugin, facts, style)
+            except Exception as exc:
+                isolated("shopping_engine.phrase", exc)
+            if line:
+                await amo.push_to_owner(line)
             if hasattr(amo, "note_shopping_pending"):
                 amo.note_shopping_pending("你正在商场试%s，等老公回复，语气要充满期待。" % name,
                                           now.timestamp() + 15 * 60)

@@ -89,6 +89,14 @@ def _owner_umo(plugin):
         return "", amo
 
 
+async def phrase(plugin, facts, style=""):
+    """把事实交给模型，用她自己的口吻说一句；失败返回空串（不塞模板）。"""
+    system = ("你是她本人，用第一人称给老公发一条微信，只说一句，口语、自然、带一点情绪。"
+              "只能根据给出的事实说，不编造；不要解释，不要括号旁白，不要客服腔。")
+    prompt = "事实：%s\n场景/语气：%s" % (str(facts or ""), str(style or "自然"))
+    return await _chat(plugin, system, prompt)
+
+
 async def _chat(plugin, system, prompt):
     """先走 amo 的 LLM 通道（有 owner umo，和聊天同一个模型），再退回 AstrBot provider。"""
     if isinstance(system, (list, tuple)):

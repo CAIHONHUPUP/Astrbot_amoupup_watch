@@ -77,11 +77,18 @@ class ShoppingTests(unittest.TestCase):
         return plugin, out
 
     def test_rich_buys_mall_item(self):
-        plugin, out = self.run_shop()
+        from unittest import mock
+        from services import social_ai
+
+        async def fake_phrase(plugin, facts, style=""):
+            return "这件挺好看的，我能买吗"
+
+        with mock.patch.object(social_ai, "phrase", fake_phrase):
+            plugin, out = self.run_shop()
         self.assertIsNotNone(out)
         self.assertEqual(plugin.amo.items, [])
         self.assertTrue(plugin.finance_repo.meta_get("shop:pending"))
-        self.assertTrue(any("试了一件" in t and "能买吗" in t for t in plugin.amo.pushed))
+        self.assertIn("这件挺好看的，我能买吗", plugin.amo.pushed)
 
     def test_middle_buys_cheap(self):
         plugin, out = self.run_shop(cash=100000)

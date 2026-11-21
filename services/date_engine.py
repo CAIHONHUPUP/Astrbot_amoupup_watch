@@ -14,7 +14,7 @@ except ImportError:  # 离线测试 / 顶层加载
     from guard import isolated
     from core.amo_bridge import AmoBridge
 
-from .date_rules import (AGREE_EXACT, CANCEL_WORDS, CLAIM_WINDOWS, GENERIC_YES,
+from .date_rules import (AGREE_EXACT, CANCEL_WORDS as CANCEL_WORDS, CLAIM_WINDOWS, GENERIC_YES,
                          PAUSE_MAX_MINUTES, base_cost, claim_slot, clock_minutes, compact,
                          human_day_period, human_when, is_agreement, is_arrival,
                          is_date_end, is_date_pause, is_date_resume, is_interrupt,
@@ -666,11 +666,20 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
     if random.random() < 0.3:
         incident = random.choice(DATE_INCIDENTS)
         bridge.call("set_date_incident", incident, end.timestamp())
-        gate = getattr(bridge.resolve(), "request_push", None)
-        if callable(gate):
-            await gate(incident, "date_incident")
-        else:
-            await bridge.call_async("push_to_owner", incident)
+        line = ""
+        try:
+            from . import social_ai as _social_ai
+            line = await _social_ai.phrase(
+                getattr(bridge, "plugin", None),
+                "约会中发生：%s" % incident, "有点意外，想跟他撒娇/吐槽")
+        except Exception as exc:
+            isolated("date_engine.incident_phrase", exc)
+        if line:
+            gate = getattr(bridge.resolve(), "request_push", None)
+            if callable(gate):
+                await gate(line, "date_incident")
+            else:
+                await bridge.call_async("push_to_owner", line)
     day = now.date().isoformat()
     item = {"start": now.strftime("%H:%M"), "end": end.strftime("%H:%M"),
             "activity": "和老公" + title, "category": "social", "place": "外面", "locked": True,
@@ -691,10 +700,11 @@ async def _attend_amo_schedule(bridge, now, end, title, when_label, company, tar
         isolated("date_engine.attend_date.8", exc)
 
 
+#: 只放客观事实，口吻交给模型现生成（2026-11-21 去模板化）
 DATE_INCIDENTS = (
-    "老公！外面突然下大雨了，我没带伞，咱们被困在商场了，呜呜呜。",
-    "救命，这家火锅店排队排了 50 桌，我快饿晕过去了……",
-    "刚刚试了一件衣服，感觉有点显胖，你帮我参考一下嘛~",
+    "外面突然下大雨，她没带伞，两人被困在商场",
+    "火锅店排队大约 50 桌，她很饿",
+    "她试了一件衣服，觉得有点显胖，想让他参考",
 )
 LOOT_CLOTHES = ("米色针织开衫", "碎花连衣裙", "白色帆布鞋", "焦糖色半身裙")
 LOOT_HOME = ("香薰蜡烛", "小台灯", "毛绒抱枕", "多肉盆栽")
