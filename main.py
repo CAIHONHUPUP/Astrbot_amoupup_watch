@@ -794,7 +794,7 @@ class WatchPlugin(ToolWrappersMixin, ApiMixin, CardMixin, Star):
     if filter is not None:
         watch_cmd = filter.command("watch")(watch_cmd)
         money_cmd = filter.command("理财")(money_cmd)
-        filter.command("搬家")(city_cmd)
+        filter.command("换城市")(city_cmd)
         filter.command("设定城市")(city_cmd)
         on_llm_request = filter.on_llm_request()(on_llm_request)
         on_transfer = filter.event_message_type(filter.EventMessageType.ALL)(on_transfer)

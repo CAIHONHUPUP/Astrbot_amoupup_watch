@@ -148,6 +148,9 @@
   "push_to_owner": [
     "text"
   ],
+  "relation_of": [
+    "name"
+  ],
   "request_hunger_help": [],
   "save_diary": [
     "day",
