@@ -8,10 +8,10 @@
 
 默认干跑，--apply 才写；写入前自动备份目标库。
 
-用法：
-    python work/migrate_relations.py --watch-db <social.db> --amo-db <amo_forever.db>
-    python work/migrate_relations.py ... --apply
-    python work/migrate_relations.py ... --mode import --apply
+用法（放在 tools/ 下，纯数据库脚本，不需要 sim_lib）：
+    python tools/migrate_relations.py --watch-db <social.db> --amo-db <amo_forever.db>
+    python tools/migrate_relations.py ... --apply
+    python tools/migrate_relations.py ... --mode import --apply
 """
 from __future__ import annotations
 
