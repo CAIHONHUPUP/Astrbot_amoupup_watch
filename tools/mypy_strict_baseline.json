@@ -1,7 +1,7 @@
 {
- "errors": 64,
+ "errors": 62,
  "files": 20,
- "checked": 87,
+ "checked": 91,
  "updated": "2026-11-18",
  "note": "严格 mypy 棘轮基线（--check-untyped-defs，排除 tests/tools/work）"
 }

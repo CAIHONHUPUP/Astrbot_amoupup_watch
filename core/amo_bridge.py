@@ -152,6 +152,12 @@ _CALLS = {
     "late_snack_decisions": lambda amo, *a, **k: amo.late_snack_decisions(*a, **k),
     "ledger": lambda amo, *a, **k: amo.wallet.ledger(*a, **k),
     "chat_raw": lambda amo, *a, **k: amo.llm.chat_raw(*a, **k),
+    # 跨插件只读契约（task-27）：LifeStateSnapshot / MetricsAPI
+    "life_state_contract": lambda amo, *a, **k: amo.life_state_contract(*a, **k),
+    "life_state_snapshot": lambda amo, *a, **k: amo.life_state_snapshot(*a, **k),
+    "metrics_contract": lambda amo, *a, **k: amo.metrics_contract(*a, **k),
+    "metrics_snapshot": lambda amo, *a, **k: amo.metrics_snapshot(*a, **k),
+    "month_consumption_cents": lambda amo, *a, **k: amo.month_consumption_cents(*a, **k),
 }
 
 #: Phase 15：set_date_ending / set_last_date_event 已经登记进 _CALLS 并补进快照，

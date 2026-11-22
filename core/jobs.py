@@ -135,7 +135,7 @@ async def finance_tick(plugin):
             except Exception as exc:
                 isolated("finance.social_settle", exc)
             social_out = await plugin.social.scheduled(_dt.datetime.now())
-            # 只推她自己说出口的那句（LLM 生成的 note）；系统事实不直接当她的消息发出去
+            # push 里已经是「谁约我什么、我答没答应」的转述：她回 NPC 的微信绝不能原样转给老公
             for text in (social_out or {}).get("push", []):
                 text = str(text or "").strip()
                 if not text:

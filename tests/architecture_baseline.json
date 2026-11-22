@@ -70,6 +70,10 @@
     "utils",
     "utils.clock"
   ],
+  "core/life_state.py": [
+    "core",
+    "core.amo_bridge"
+  ],
   "core/llm_decider.py": [
     "guard"
   ],
@@ -188,6 +192,8 @@
   ],
   "services/dashboard.py": [
     "guard",
+    "services",
+    "services.metrics",
     "utils",
     "utils.helpers"
   ],
@@ -311,9 +317,11 @@
     "utils.helpers"
   ],
   "services/shopping_engine.py": [
+    "core",
     "guard",
     "services",
     "services.city",
+    "services.shopping_state",
     "services.social_ai",
     "utils",
     "utils.helpers",
@@ -401,10 +409,14 @@
     "services",
     "services.bank_engine",
     "services.city",
+    "services.metrics",
     "ui",
     "ui.report"
   ],
-  "ui/report.py": [],
+  "ui/report.py": [
+    "services",
+    "services.metrics"
+  ],
   "utils/__init__.py": [
     "utils.helpers"
   ],

@@ -196,7 +196,9 @@ def test_scheduled_full_chain_with_composer_and_decider():
     assert out["invite"] and out["decision"] and out["decision"]["ok"]
     assert "余额" in seen["facts"] and "疲惫值" in seen["facts"]
     assert fin.schedules and eng.pending_charges() and fin.cash == 500000
-    assert out["push"] == ["好呀，下午商场见"]
+    # 2026-11-22：push 只放给老公的转述，不再是她回 NPC 的「好呀，下午商场见」
+    assert out["decision"]["line"] == "好呀，下午商场见"
+    assert out["push"] == ["老公，柳如烟约我今天下午逛商场，我答应了"]
 
 
 def test_scheduled_without_llm_keeps_pending():

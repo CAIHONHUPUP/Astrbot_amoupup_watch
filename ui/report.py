@@ -13,17 +13,15 @@ from __future__ import annotations
 
 import datetime as _dt
 
+#: 本月消费口径（task-27）：唯一计算函数在 services/metrics.py（与能陪 metrics 同口径）。
+#: 这里只做导入，不再本地按 reason 前缀排除——那是 473 vs 16016 两个面板不同源的根因。
+try:
+    from ..services.metrics import consumption_cents as _consumption_cents
+except ImportError:
+    from services.metrics import consumption_cents as _consumption_cents
+
 #: 算进「水电燃气」的结算类型
 UTILITY_KINDS = ("water", "electric", "gas", "broadband")
-
-#: 不算「本月支出」的流水原因（房租水电走 settled，工资是收入，交易/借贷另有卡片）
-_EXCLUDE_PREFIXES = (
-    "房租", "水费", "电费", "燃气费", "宽带", "物业", "取暖",
-    "工资", "奖金", "红包",
-    "买入", "卖出", "申购", "赎回", "基金",
-    "贷款", "还款", "利息", "分期",
-    "转账", "初始存款", "可取余额", "卖出资金", "用户转账",
-)
 
 
 def _cents(value) -> int:
@@ -49,8 +47,13 @@ def _next_salary_date(today: _dt.date, salary_day: int) -> str:
     return _dt.date(year, month, day).isoformat()
 
 
-def life_block(settlements, ledger, salary_cents, today, rent_day=1, salary_day=15) -> dict:
-    """生活账单：当月已结算的房租/水电 + 本月其他支出。金额单位是元（面板口径）。"""
+def life_block(settlements, ledger, salary_cents, today, rent_day=1, salary_day=15,
+               consumption_cents=None) -> dict:
+    """生活账单：当月已结算的房租/水电 + 本月消费。金额单位是元（面板口径）。
+
+    consumption_cents：调用方已从能陪 MetricsAPI 取到本月消费（整数分）时直接传，
+    保证「首页/生活卡」是同一个数；不传才用同一口径在本地重算。
+    """
     today = today or _dt.date.today()
     month = today.strftime("%Y-%m")
     rent = 0
@@ -64,19 +67,13 @@ def life_block(settlements, ledger, salary_cents, today, rent_day=1, salary_day=
             rent += amount
         elif kind in UTILITY_KINDS:
             utilities += amount
-    expense = 0
-    for row in ledger or []:
-        delta = int(row.get("delta_cents") or 0)
-        if delta >= 0:
-            continue
-        if str(row.get("account") or "cash") != "cash":
-            continue
-        if _month_of(row.get("ts")) != month:
-            continue
-        reason = str(row.get("reason") or "")
-        if any(reason.startswith(prefix) for prefix in _EXCLUDE_PREFIXES):
-            continue
-        expense += -delta
+    if consumption_cents is None:
+        expense = _consumption_cents(ledger or [], month)
+    else:
+        try:
+            expense = int(consumption_cents)
+        except (TypeError, ValueError):
+            expense = _consumption_cents(ledger or [], month)
     return {
         "salary": int(salary_cents or 0) / 100.0,
         "salary_day": int(salary_day or 15),

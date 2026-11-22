@@ -20,14 +20,22 @@
   "balance": [
     "account"
   ],
+  "can_engage": [
+    "kind",
+    "profile"
+  ],
+  "can_shop": [],
   "cancel_date_session": [
     "now",
     "reason"
   ],
   "chat_raw": [
     "contexts",
+    "p",
     "prompt",
+    "s",
     "system",
+    "u",
     "umo"
   ],
   "clear_date_ending": [],
@@ -35,6 +43,7 @@
   "commit_schedule_change": [
     "day",
     "invalidate_from",
+    "new",
     "new_items",
     "old_items",
     "reason",
@@ -99,11 +108,15 @@
     "now"
   ],
   "kv_get": [
+    "d",
     "default",
+    "k",
     "key"
   ],
   "kv_set": [
+    "k",
     "key",
+    "v",
     "value"
   ],
   "late_night_state": [],
@@ -119,10 +132,21 @@
   "ledger": [
     "limit"
   ],
+  "life_state_contract": [],
+  "life_state_snapshot": [
+    "now"
+  ],
   "mark_meal": [
     "cooldown_hours",
     "food",
     "mood"
+  ],
+  "metrics_contract": [],
+  "metrics_snapshot": [
+    "now"
+  ],
+  "month_consumption_cents": [
+    "month"
   ],
   "note_expense_summary": [
     "line"
@@ -139,13 +163,18 @@
     "price_cents"
   ],
   "note_recent_topic": [
+    "day",
     "key",
     "text",
     "ttl_hours",
     "until_ts"
   ],
   "note_shopping_pending": [
+    "color",
     "line",
+    "name",
+    "price_cents",
+    "scene_id",
     "until_ts"
   ],
   "note_transfer_event": [
@@ -156,6 +185,7 @@
   "on_forced_overtime": [],
   "protocol_info": [],
   "push_to_owner": [
+    "kind",
     "text"
   ],
   "relation_of": [

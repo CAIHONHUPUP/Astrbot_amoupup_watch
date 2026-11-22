@@ -229,7 +229,15 @@ class CardMixin:
             rows = self.finance_repo.settlements(today.strftime("%Y-%m")) if self.finance_repo else []
             ledger = self.finance.ledger(200) if self.finance is not None else []
             salary_cents = self.finance_life.salary_cents() if self.finance_life is not None else 0
-            life = life_block(rows, ledger, salary_cents, today)
+            # task-27：本月消费与首页同源（能陪 MetricsAPI），不再两处各算一套
+            try:
+                from ..services.metrics import month_consumption
+            except ImportError:
+                from services.metrics import month_consumption
+            expense_metric = month_consumption(self)
+            life = life_block(rows, ledger, salary_cents, today,
+                              consumption_cents=expense_metric.get("cents", 0))
+            life["month_expense_source"] = str(expense_metric.get("source") or "")
             keys = self.finance_repo.meta_keys("decision_done:" + today.isoformat()) if self.finance_repo else []
             market = market_block([str(k).split(":", 3)[-1] for k in keys], 3,
                                   "腾讯 qt.gtimg.cn", "每天三次：9:30 / 11:30 / 14:50")
@@ -295,8 +303,9 @@ class CardMixin:
         try:
             if self.finance_expense is not None:
                 summ = self.finance_expense.month_summary()
-                if summ.get("total_cents"):
-                    life["month_expense"] = summ["total_cents"] / 100.0
+                # task-27：expense_engine 的月汇总（watch.expenses）只覆盖小额日常，
+                # 不能覆盖本月消费的权威口径；单列成分类小卡，不再篡改 month_expense。
+                life["expense_category_total"] = summ.get("total_cents", 0) / 100.0
                 life["expense_categories"] = [
                     {"key": item["key"], "label": item["label"],
                      "amount": item["amount_cents"] / 100.0}

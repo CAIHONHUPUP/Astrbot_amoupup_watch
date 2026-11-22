@@ -415,7 +415,9 @@ def test_collision_reschedule_keeps_one_idem():
     eng, repo, fin = _social_engine()
     fin.windows = {"2026-11-21": [{"start": "14:00", "end": "17:00", "activity": "上班"}]}
     eng.set_invite(_invite())
-    res = asyncio.run(eng.accept_invite(note="好呀"))
+    # 用固定的周六上午做「答应」时刻：不写 now 会拿真实时间，过了改期后的 14:00
+    # 就会走「到点当场扣钱」，这个用例在下午跑必红（时间炸弹）。
+    res = asyncio.run(eng.accept_invite(note="好呀", now=SAT))
     assert res["ok"] is True
     assert res["schedule"]["day"] == "2026-11-22"
     # 答应时不扣钱；到改期后的 14:00 才扣，幂等键仍按原始邀约日子算

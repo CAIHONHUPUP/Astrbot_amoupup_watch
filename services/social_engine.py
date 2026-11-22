@@ -202,6 +202,53 @@ def plan_line(npc, day="", start="", topic="", place=""):
     return "答应了%s，回头%s" % (npc, target)
 
 
+def _period_word(start):
+    """把开始时间翻成她跟老公开口时会用的时段词；没有时间就不加。"""
+    text = str(start or "").strip()
+    if not text:
+        return ""
+    clock = minutes(text)
+    if clock < 11 * 60 + 30:
+        return "上午"
+    if clock < 13 * 60 + 30:
+        return "中午"
+    if clock < 17 * 60 + 30:
+        return "下午"
+    if clock < 23 * 60:
+        return "晚上"
+    return "夜里"
+
+
+def relay_line(npc, action="accept", day="", start="", topic="", place="", now=None):
+    """给老公的转述句：只说「谁约我什么、我答没答应」。
+
+    2026-11-22 11:31 线上串台：妈妈约她中午回家吃饭，她回妈妈
+    「妈，我地铁上呢……我马上到」，这句（accept_invite 的 line）被 _apply
+    原样塞进 out["push"]，jobs 又 request_push 给老公——收到的是她对妈妈说的话。
+    回 NPC 的微信和给老公的话是两个方向，绝不能复用；这里只生成第三人称事实转述。
+    """
+    now = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
+    name = str(npc or "").strip() or "朋友"
+    when = ""
+    day_text = str(day or "").strip()
+    if day_text:
+        try:
+            when = relative_label(_dt.date.fromisoformat(day_text), now)
+        except (TypeError, ValueError):
+            when = day_text[5:] if len(day_text) >= 10 else day_text
+    when += _period_word(start)
+    what = str(topic or "").strip()
+    if not what:
+        where = str(place or "").strip()
+        what = ("去" + where) if where else "见个面"
+    verb = "，我答应了" if str(action or "").strip().lower() == "accept" else "，我婉拒了"
+    said = humanize_numbers(npc_roster.sanitize("老公，%s约我%s%s%s" % (name, when, what, verb), name))
+    if said:
+        return said
+    # 标题里真夹了名单外的名字时 sanitize 会整句拦掉：退到只含名单内名字的最小转述
+    return humanize_numbers(npc_roster.sanitize("老公，%s约我%s%s" % (name, when, verb), name))
+
+
 def _dynamic_text(kind, payload, now=None):
     """动态正文取哪一句：答应/赴约这类「未来的事」，到点前只说约定，事后才说回忆。"""
     k = str(kind or "")
@@ -1719,8 +1766,19 @@ class SocialEngine:
         else:
             return None
         out["events"].append(result)
-        if result.get("ok") and result.get("line"):
-            out["push"].append(str(result["line"]))
+        if result.get("ok"):
+            # 推给老公的只放「谁约我什么、我答没答应」的第三人称转述；
+            # 她回 NPC 的那句（result["line"] / accept_invite 的 said）绝不能原样转给老公。
+            sched = result.get("schedule") or {}
+            line = relay_line(
+                str(invite.get("npc") or ""), action,
+                day=str(sched.get("day") or invite.get("day") or ""),
+                start=str(sched.get("start") or invite.get("start") or ""),
+                topic=str(invite.get("topic") or ""),
+                place=str(sched.get("place") or invite.get("place") or ""),
+                now=now)
+            if line:
+                out["push"].append(line)
         return result
 
     async def scheduled(self, now=None, decider=None, composer=None):

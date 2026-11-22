@@ -19,8 +19,14 @@ def dashboard_text(plugin):
         positions = repo.positions() if repo else []
         market = sum(int(p.get("qty") or 0) * int(p.get("last_cents") or 0) for p in positions)
         loans = sum(int(r.get("balance_cents") or 0) for r in (repo.loans() if repo else [])) if hasattr(repo, "loans") else 0
-        month = __import__("datetime").date.today().strftime("%Y-%m")
-        expense = sum(int(r.get("amount_cents") or 0) for r in (repo.expenses(period=month) if hasattr(repo, "expenses") else []))
+        # task-27：首页“本月支出”不能读 watch.expenses（只有小额日常，且会漏跨插件消费），
+        # 与生活卡同源：能陪 MetricsAPI 的唯一消费口径。
+        try:
+            from ..services.metrics import month_consumption
+        except ImportError:
+            from services.metrics import month_consumption
+        expense_metric = month_consumption(plugin)
+        expense = int(expense_metric.get("cents") or 0)
         city = (getattr(plugin, "config", {}) or {}).get("city") or ""
         medical = getattr(plugin, "medical", None)
         sick = bool(medical.is_sick()) if medical is not None else False
