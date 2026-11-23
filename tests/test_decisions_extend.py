@@ -143,6 +143,22 @@ def test_ledger_blocks_keeps_only_expenses_and_buckets_by_hour():
     assert blocks[0]["count"] == 2
 
 
+def test_ledger_blocks_skips_credit_adjustment_and_non_cash():
+    # 2026-11-23 线上：碗面 20 元，现金 -20 加上可取额度联动 -20，被显示成 40。
+    rows = [
+        {"account": "cash", "category": "吃的", "delta_cents": -2000, "ts": ts_at(7),
+         "idem": "food:2026-11-23:7"},
+        {"account": "withdrawable", "category": "账户调整", "delta_cents": -2000,
+         "ts": ts_at(7), "idem": "withdrawable:cap:8000:10000"},
+        {"account": "savings", "category": "存款", "delta_cents": -5000, "ts": ts_at(7),
+         "idem": "save:2026-11-23"},
+    ]
+    blocks = decisions_ext.ledger_blocks(rows)
+    assert len(blocks) == 1
+    assert blocks[0]["amount_cents"] == 2000
+    assert blocks[0]["count"] == 1
+
+
 def test_reconcile_ok_when_decision_matches_block():
     items = [{"day": today(), "hour": 22, "amount_cents": 1500}]
     blocks = [{"day": today(), "hour": 22, "amount_cents": 1500, "count": 1}]

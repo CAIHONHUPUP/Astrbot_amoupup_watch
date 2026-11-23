@@ -919,11 +919,9 @@
       var saidAt = (createdAt && createdAt !== whenText)
         ? (" · " + (String(e.kind || "").indexOf("accept") >= 0 ? "答应于 " : "收到于 ") + createdAt)
         : "";
+      // 2026-11-23 用户要求：动态卡片只留「谁 + 内容」，时间/对应日程不再展示。
       items.push('<div class="item"><div class="k">' + esc(who) + '</div>'
         + '<div class="v" style="font-size:13px;font-weight:500">' + esc(text) + '</div>'
-        + '<div class="s">' + esc(whenText + saidAt) + '</div>'
-        + ((p.day && p.start) ? ('<div class="s">对应日程：' + esc(p.day) + ' '
-          + esc(p.start) + '-' + esc(p.end || "") + ' ' + esc(p.topic || "") + '</div>') : '')
         + '</div>');
     });
     if (!items.length) {

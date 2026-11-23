@@ -107,6 +107,16 @@ def ledger_blocks(rows):
     for row in rows or []:
         if not isinstance(row, dict):
             continue
+        # 只有现金账户的支出才算消费：现金花掉时 withdrawable 会联动记一条
+        # 「可取额度随现金下调」的账户调整（account=withdrawable / category=账户调整），
+        # 再算一次会把 20 元的面显示成 40（2026-11-23 线上）。
+        if str(row.get("account") or "cash") != "cash":
+            continue
+        if str(row.get("category") or "") in ("存款", "投资", "转账", "退款", "理财",
+                                             "基金", "股票", "账户调整", "房租", "水电"):
+            continue
+        if str(row.get("idem") or "").startswith("withdrawable:"):
+            continue
         cents = _as_int(row.get("delta_cents"))
         if cents >= 0:
             continue
